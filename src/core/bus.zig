@@ -36,9 +36,33 @@ const MemoryRegion = enum(u64) {
     RDRAM4 = 0x004, RDRAM5 = 0x005, RDRAM6 = 0x006, RDRAM7 = 0x007,
 
     RDRAMIO = 0x03F,
-
-    RSP = 0x040,
+    RSP     = 0x040,
+    PI      = 0x046,
 };
+
+// TODO: write own module for PI stuff
+const PIReg = enum(u64) {
+    DRAMAddr = 0x00,
+    CartAddr = 0x04,
+    WriteLen = 0x0C,
+    PIStatus = 0x10,
+};
+
+const PIStatus = packed struct {
+    dmaBusy : bool = false,
+    ioBusy  : bool = false,
+    dmaError: bool = false,
+    dmaIRQ  : bool = false,
+    _pad0   :  u12 = 0,
+    _pad1   :  u16 = 0,
+};
+
+const PIRegs = struct {
+    dramAddr: u32 = undefined, cartAddr: u32 = undefined, writeLen: u32 = undefined,
+    piStatus: PIStatus = PIStatus{},
+};
+
+var piRegs = PIRegs{};
 
 var ram: []u8 = undefined; // RDRAM
 var rom: []u8 = undefined; // Cartridge ROM
@@ -48,7 +72,7 @@ var spDMEM: []u8 = undefined;
 
 /// Initialize bus module
 pub fn init(alloc: std.mem.Allocator, romPath: []const u8, isFastBoot: bool) anyerror!void {
-    ram = try alloc.alloc(u8, 0x40_0000);
+    ram = try alloc.alloc(u8, 0x80_0000);
 
     spDMEM = try alloc.alloc(u8, 0x1000);
     
@@ -73,11 +97,15 @@ pub fn deinit(alloc: std.mem.Allocator) void {
 }
 
 pub fn read32(pAddr: u64) u32 {
-    const pAddr_ = pAddr & 0xFFFFFFFC;
+    const pAddr_ = pAddr & 0xFFFF_FFFC;
 
     var data: u32 = undefined;
 
     switch (pAddr_ >> 20) {
+        @enumToInt(MemoryRegion.RDRAM0) ... @enumToInt(MemoryRegion.RDRAM7) => {
+            @memcpy(@ptrCast([*]u8, &data), @ptrCast([*]u8, &ram[pAddr_ & 0x7F_FFFF]), 4);
+            data = @byteSwap(u32, data);
+        },
         @enumToInt(MemoryRegion.RSP) => {
             switch ((pAddr_ >> 12) & 0xFF) {
                 0x00 => {
@@ -85,6 +113,20 @@ pub fn read32(pAddr: u64) u32 {
                     data = @byteSwap(u32, data);
                 },
                 else => {
+                    unreachable;
+                }
+            }
+        },
+        @enumToInt(MemoryRegion.PI) => {
+            switch (pAddr_ & 0xF_FFFF) {
+                @enumToInt(PIReg.PIStatus) => {
+                    std.log.info("[Bus] Read32 @ pAddr {X}h (PI Status).", .{pAddr_});
+
+                    data = @bitCast(u32, piRegs.piStatus);
+                },
+                else => {
+                    std.log.warn("[Bus] Unhandled read32 @ pAddr {X}h (Peripheral Interface).", .{pAddr_});
+
                     unreachable;
                 }
             }
@@ -97,4 +139,43 @@ pub fn read32(pAddr: u64) u32 {
     }
 
     return data;
+}
+
+pub fn write32(pAddr: u64, data: u32) void {
+    const pAddr_ = pAddr & 0xFFFF_FFFC;
+
+    switch (pAddr_ >> 20) {
+        @enumToInt(MemoryRegion.PI) => {
+            switch (pAddr_ & 0xF_FFFF) {
+                @enumToInt(PIReg.DRAMAddr) => {
+                    std.log.info("[Bus] Write32 @ pAddr {X}h (PI DRAM Address), data: {X}h.", .{pAddr_, data});
+
+                    piRegs.dramAddr = data & 0xFF_FFFF;
+                },
+                @enumToInt(PIReg.CartAddr) => {
+                    std.log.info("[Bus] Write32 @ pAddr {X}h (PI Cart Address), data: {X}h.", .{pAddr_, data});
+
+                    piRegs.cartAddr = data;
+                },
+                @enumToInt(PIReg.WriteLen) => {
+                    std.log.info("[Bus] Write32 @ pAddr {X}h (PI Write Length), data: {X}h.", .{pAddr_, data});
+
+                    piRegs.writeLen = data & 0xFF_FFFF;
+
+                    // Start PI DMA (Cartridge => RDRAM)
+                    @memcpy(@ptrCast([*]u8, &ram[piRegs.dramAddr]), @ptrCast([*]u8, &rom[piRegs.cartAddr & 0xFFF_FFFF]), piRegs.writeLen +% 1);
+
+                    piRegs.piStatus.dmaIRQ = true;
+                },
+                else => {
+                    std.log.warn("[Bus] Unhandled write32 @ pAddr {X}h (Peripheral Interface), data: {X}h.", .{pAddr_, data});
+                }
+            }
+        },
+        else => {
+            std.log.warn("[Bus] Unhandled write32 @ pAddr {X}h, data: {X}h.", .{pAddr_, data});
+
+            unreachable;
+        }
+    }
 }

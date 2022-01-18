@@ -36,8 +36,20 @@ const CPUReg = enum(u32) {
 
 /// OPCODE field
 const Opcode = enum(u32) {
-    ORI = 0x0D,
-    LUI = 0x0F,
+    SPECIAL = 0x00,
+
+    BNE  = 0x05,
+    ANDI = 0x0C,
+    ORI  = 0x0D,
+    LUI  = 0x0F,
+    LW   = 0x23,
+    SW   = 0x2B,
+};
+
+/// SPECIAL field
+const Special = enum(u32) {
+    SLL = 0x00,
+    JR  = 0x08,
 };
 
 /// VR4300i register file
@@ -47,13 +59,8 @@ const RegFile = struct {
     pc : u64 = undefined,
     npc: u64 = undefined,
 
-    /// Reads GPR (32-bit)
-    pub fn get32(self: RegFile, idx: u32) u32 {
-        return @intCast(u32, self.gprs[idx]);
-    }
-
     /// Reads GPR (64-bit)
-    pub fn get64(self: RegFile, idx: u32) u64 {
+    pub fn get(self: RegFile, idx: u32) u64 {
         return self.gprs[idx];
     }
 
@@ -121,6 +128,10 @@ fn getImm16(instr: u32) u32 {
     return instr & 0xFFFF;
 }
 
+fn getRd(instr: u32) u32 {
+    return (instr >> 11) & 0x1F;
+}
+
 fn getRs(instr: u32) u32 {
     return (instr >> 21) & 0x1F;
 }
@@ -129,12 +140,26 @@ fn getRt(instr: u32) u32 {
     return (instr >> 16) & 0x1F;
 }
 
+fn getSa(instr: u32) u32 {
+    return (instr >> 6) & 0x1F;
+}
+
 /// Reads a 32-bit word from memory
 fn read32(addr: u64) u32 {
     // Mask address
-    const pAddr = addr & 0xFFF_FFFF;
+    const pAddr = addr & 0x1FFF_FFFF;
+
+    // TODO: address translation
 
     return bus.read32(pAddr);
+}
+
+/// Writes a 32-bit word to memory
+fn store32(addr: u64, data: u32) void {
+    // Mask address
+    const pAddr = addr & 0x1FFF_FFFF;
+
+    bus.write32(pAddr, data);
 }
 
 /// Reads an instruction, increments PC
@@ -144,6 +169,8 @@ fn fetchInstr() u32 {
     regs.pc  = regs.npc;
     regs.npc +%= 4;
 
+    isBranchDelay = false;
+
     return data;
 }
 
@@ -152,8 +179,25 @@ fn decodeInstr(instr: u32) void {
     const opcode = instr >> 26;
 
     switch (opcode) {
-        @enumToInt(Opcode.ORI) => iORI(instr),
-        @enumToInt(Opcode.LUI) => iLUI(instr),
+        @enumToInt(Opcode.SPECIAL) => {
+            const funct = instr & 0x3F;
+
+            switch (funct) {
+                @enumToInt(Special.SLL) => iSLL(instr),
+                @enumToInt(Special.JR ) => iJR (instr),
+                else => {
+                    warn("[CPU] Unhandled function {X}h ({X}h).", .{funct, instr});
+
+                    unreachable;
+                }
+            }
+        },
+        @enumToInt(Opcode.BNE ) => iBNE (instr),
+        @enumToInt(Opcode.ANDI) => iANDI(instr),
+        @enumToInt(Opcode.ORI ) => iORI (instr),
+        @enumToInt(Opcode.LUI ) => iLUI (instr),
+        @enumToInt(Opcode.LW  ) => iLW  (instr),
+        @enumToInt(Opcode.SW  ) => iSW  (instr),
         else => {
             warn("[CPU] Unhandled opcode {X}h ({X}h).", .{opcode, instr});
 
@@ -164,27 +208,120 @@ fn decodeInstr(instr: u32) void {
 
 // Instruction helpers
 
+fn doBranch(target: u64, isCondition: bool, isLink: bool, isLikely: bool) void {
+    isBranchDelay = true;
+
+    if (isCondition) {
+        regs.npc = target;
+    }
+
+    if (isLink or isLikely) unreachable;
+}
+
+// Instruction handlers
+
+/// ANDI - AND Immediate
+fn iANDI(instr: u32) void {
+    const imm = @intCast(u64, getImm16(instr));
+
+    const rs = getRs(instr);
+    const rt = getRt(instr);
+
+    regs.set64(rt, regs.get(rs) & imm);
+
+    info("[CPU] ANDI ${}, ${}, {X}h; ${} = {X}h", .{rt, rs, imm, rt, regs.get(rt)});
+}
+
+/// BNE - Branch on Not Equal
+fn iBNE(instr: u32) void {
+    const offset = exts32(getImm16(instr));
+
+    const rs = getRs(instr);
+    const rt = getRt(instr);
+
+    const target = regs.pc +% offset;
+
+    doBranch(target, regs.get(rs) != regs.get(rt), false, false);
+
+    info("[CPU] BNE ${}, ${}, {X}h; %{} = {X}h, %{} = {X}h", .{rs, rt, target, rs, regs.get(rs), rt, regs.get(rt)});
+}
+
+/// JR - Jump Register
+fn iJR(instr: u32) void {
+    const rs = getRs(instr);
+
+    const target = regs.get(rs);
+
+    doBranch(target, true, false, false);
+
+    info("[CPU] JR ${}; PC = {X}h", .{rs, target});
+}
+
 /// LUI - Load Upper Immediate
 fn iLUI(instr: u32) void {
-    const imm = getImm16(instr) << 16;
+    const imm = getImm16(instr);
 
     const rt = getRt(instr);
 
-    regs.set32(rt, imm, true);
+    regs.set32(rt, imm << 16, true);
 
-    info("[CPU] LUI ${}, {X}h; ${} = {X}h", .{rt, imm, rt, regs.get64(rt)});
+    info("[CPU] LUI ${}, {X}h; ${} = {X}h", .{rt, imm, rt, regs.get(rt)});
+}
+
+/// LW - Load Word
+fn iLW(instr: u32) void {
+    const imm = exts32(getImm16(instr));
+
+    const base = getRs(instr);
+    const rt   = getRt(instr);
+
+    const addr = regs.get(base) + imm;
+
+    regs.set32(rt, read32(addr), true);
+
+    info("[CPU] LW ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, regs.get(rt)});
 }
 
 /// ORI - OR Immediate
 fn iORI(instr: u32) void {
     const imm = @intCast(u64, getImm16(instr));
-    
+
     const rs = getRs(instr);
     const rt = getRt(instr);
 
-    regs.set64(rt, regs.get64(rs) | imm);
+    regs.set64(rt, regs.get(rs) | imm);
 
-    info("[CPU] ORI ${}, ${}, {X}h; ${} = {X}h", .{rt, rs, imm, rt, regs.get64(rt)});
+    info("[CPU] ORI ${}, ${}, {X}h; ${} = {X}h", .{rt, rs, imm, rt, regs.get(rt)});
+}
+
+/// SLL - Shift Left Logical
+fn iSLL(instr: u32) void {
+    const sa = getSa(instr);
+
+    const rd = getRd(instr);
+    const rt = getRt(instr);
+
+    regs.set32(rd, @truncate(u32, regs.get(rt) << @truncate(u6, sa)), true);
+
+    if (rd == @enumToInt(CPUReg.R0)) {
+        info("[CPU] NOP", .{});
+    } else {
+        info("[CPU] SLL ${}, ${}, {}; ${} = {X}h", .{rd, rt, sa, rd, regs.get(rd)});
+    }
+}
+
+/// SW - Store Word
+fn iSW(instr: u32) void {
+    const imm = exts32(getImm16(instr));
+
+    const base = getRs(instr);
+    const rt   = getRt(instr);
+
+    const addr = regs.get(base) + imm;
+
+    store32(addr, @truncate(u32, regs.get(rt)));
+
+    info("[CPU] SW ${}, ${}({}); ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), addr, regs.get(rt)});
 }
 
 /// Steps the CPU module, returns elapsed cycles
