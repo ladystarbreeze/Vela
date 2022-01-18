@@ -3,4 +3,7 @@ zig-cache
 zig-out
 
 # Debug
-.files
+velaDocs
+velaFiles
+
+.DS_Store
