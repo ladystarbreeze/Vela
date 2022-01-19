@@ -31,13 +31,18 @@
 
 const std = @import("std");
 
+const vi = @import("vi.zig");
+
 const MemoryRegion = enum(u64) {
     RDRAM0 = 0x000, RDRAM1 = 0x001, RDRAM2 = 0x002, RDRAM3 = 0x003,
     RDRAM4 = 0x004, RDRAM5 = 0x005, RDRAM6 = 0x006, RDRAM7 = 0x007,
 
     RDRAMIO = 0x03F,
     RSP     = 0x040,
+    VI      = 0x044,
     PI      = 0x046,
+
+    PIF = 0x1FC,
 };
 
 // TODO: write own module for PI stuff
@@ -66,6 +71,9 @@ var piRegs = PIRegs{};
 
 var ram: []u8 = undefined; // RDRAM
 var rom: []u8 = undefined; // Cartridge ROM
+
+// PIF memory
+var pifRAM: [0x40]u8 = undefined;
 
 // RSP memory
 var spDMEM: []u8 = undefined;
@@ -96,8 +104,27 @@ pub fn deinit(alloc: std.mem.Allocator) void {
     alloc.free(spDMEM);
 }
 
+pub fn read8(pAddr: u64) u8 {
+    const pAddr_ = pAddr & 0x1FFF_FFFF;
+
+    var data: u8 = undefined;
+
+    switch (pAddr_ >> 20) {
+        @enumToInt(MemoryRegion.RDRAM0) ... @enumToInt(MemoryRegion.RDRAM7) => {
+            data = ram[pAddr_ & 0x7F_FFFF];
+        },
+        else => {
+            std.log.warn("[Bus] Unhandled read8 @ pAddr {X}h.", .{pAddr_});
+
+            unreachable;
+        }
+    }
+
+    return data;
+}
+
 pub fn read32(pAddr: u64) u32 {
-    const pAddr_ = pAddr & 0xFFFF_FFFC;
+    const pAddr_ = pAddr & 0x1FFF_FFFC;
 
     var data: u32 = undefined;
 
@@ -142,9 +169,12 @@ pub fn read32(pAddr: u64) u32 {
 }
 
 pub fn write32(pAddr: u64, data: u32) void {
-    const pAddr_ = pAddr & 0xFFFF_FFFC;
+    const pAddr_ = pAddr & 0x1FFF_FFFC;
 
     switch (pAddr_ >> 20) {
+        @enumToInt(MemoryRegion.VI) => {
+            vi.write32(pAddr, data);
+        },
         @enumToInt(MemoryRegion.PI) => {
             switch (pAddr_ & 0xF_FFFF) {
                 @enumToInt(PIReg.DRAMAddr) => {
@@ -171,6 +201,9 @@ pub fn write32(pAddr: u64, data: u32) void {
                     std.log.warn("[Bus] Unhandled write32 @ pAddr {X}h (Peripheral Interface), data: {X}h.", .{pAddr_, data});
                 }
             }
+        },
+        @enumToInt(MemoryRegion.PIF) => {
+            std.log.warn("[Bus] Unhandled write32 @ pAddr {X}h (PIF), data: {X}h.", .{pAddr_, data});
         },
         else => {
             std.log.warn("[Bus] Unhandled write32 @ pAddr {X}h, data: {X}h.", .{pAddr_, data});
