@@ -123,6 +123,26 @@ pub fn read8(pAddr: u64) u8 {
     return data;
 }
 
+pub fn read16(pAddr: u64) u16 {
+    const pAddr_ = pAddr & 0x1FFF_FFFE;
+
+    var data: u16 = undefined;
+
+    switch (pAddr_ >> 20) {
+        @enumToInt(MemoryRegion.RDRAM0) ... @enumToInt(MemoryRegion.RDRAM7) => {
+            @memcpy(@ptrCast([*]u8, &data), @ptrCast([*]u8, &ram[pAddr_ & 0x7F_FFFF]), 4);
+            data = @byteSwap(u16, data);
+        },
+        else => {
+            std.log.warn("[Bus] Unhandled read16 @ pAddr {X}h.", .{pAddr_});
+
+            unreachable;
+        }
+    }
+
+    return data;
+}
+
 pub fn read32(pAddr: u64) u32 {
     const pAddr_ = pAddr & 0x1FFF_FFFC;
 
@@ -172,6 +192,11 @@ pub fn write32(pAddr: u64, data: u32) void {
     const pAddr_ = pAddr & 0x1FFF_FFFC;
 
     switch (pAddr_ >> 20) {
+        @enumToInt(MemoryRegion.RDRAM0) ... @enumToInt(MemoryRegion.RDRAM7) => {
+            const data_ = @byteSwap(u32, data);
+
+            @memcpy(@ptrCast([*]u8, &ram[pAddr_ & 0x7F_FFFF]), @ptrCast([*]const u8, &data_), 4);
+        },
         @enumToInt(MemoryRegion.VI) => {
             vi.write32(pAddr, data);
         },

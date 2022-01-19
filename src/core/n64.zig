@@ -23,7 +23,7 @@ pub fn run(romPath: []const u8) anyerror!void {
 
     cpu.init(isFastBoot);
 
-    while (true) {
+    while (cpu.isRunning) {
         const a = cpu.step();
     }
 }
