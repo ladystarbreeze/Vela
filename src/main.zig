@@ -9,7 +9,22 @@ const std = @import("std");
 
 const n64 = @import("/core/n64.zig");
 
-const romPath = "./velaFiles/basic_simpleboot.z64";
+// Passed:
+// addiu
+// andi
+// basic
+// daddiu
+// dsll
+// dsll32
+// dsra32
+// ori
+// sll
+// slti
+// sltiu
+// sra
+// srl
+// xori
+const romPath = "./velaFiles/sltiu_simpleboot.z64";
 
 pub fn main() anyerror!void {
     try n64.run(romPath);

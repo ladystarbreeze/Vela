@@ -188,6 +188,26 @@ pub fn read32(pAddr: u64) u32 {
     return data;
 }
 
+pub fn read64(pAddr: u64) u64 {
+    const pAddr_ = pAddr & 0x1FFF_FFF8;
+    
+    var data: u64 = undefined;
+
+    switch (pAddr_ >> 20) {
+        @enumToInt(MemoryRegion.RDRAM0) ... @enumToInt(MemoryRegion.RDRAM7) => {
+            @memcpy(@ptrCast([*]u8, &data), @ptrCast([*]u8, &ram[pAddr_ & 0x7F_FFFF]), 8);
+            data = @byteSwap(u64, data);
+        },
+        else => {
+            std.log.warn("[Bus] Unhandled read64 @ pAddr {X}h.", .{pAddr_});
+
+            unreachable;
+        }
+    }
+
+    return data;
+}
+
 pub fn write32(pAddr: u64, data: u32) void {
     const pAddr_ = pAddr & 0x1FFF_FFFC;
 
