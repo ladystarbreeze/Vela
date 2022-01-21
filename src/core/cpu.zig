@@ -10,7 +10,8 @@ const std = @import("std");
 const info = std.log.info;
 const warn = std.log.warn;
 
-const bus = @import("bus.zig");
+const bus  = @import("bus.zig");
+const cop0 = @import("cop0.zig");
 
 /// Sign extend 8-bit data
 fn exts8(data: u8) u64 {
@@ -42,6 +43,7 @@ const CPUReg = enum(u32) {
 /// OPCODE field
 const Opcode = enum(u32) {
     SPECIAL = 0x00,
+    REGIMM  = 0x01,
 
     J      = 0x02,
     JAL    = 0x03,
@@ -55,8 +57,10 @@ const Opcode = enum(u32) {
     ORI    = 0x0D,
     XORI   = 0x0E,
     LUI    = 0x0F,
+    COP0   = 0x10,
     BEQL   = 0x14,
     BNEL   = 0x15,
+    BLEZL  = 0x16,
     DADDI  = 0x18,
     DADDIU = 0x19,
     LH     = 0x21,
@@ -64,28 +68,53 @@ const Opcode = enum(u32) {
     LBU    = 0x24,
     LHU    = 0x25,
     LWU    = 0x27,
+    SB     = 0x28,
     SW     = 0x2B,
+    CACHE  = 0x2F,
     LD     = 0x37,
 };
 
-/// SPECIAL field
+/// SPECIAL
 const Special = enum(u32) {
     SLL    = 0x00,
     SRL    = 0x02,
     SRA    = 0x03,
+    SLLV   = 0x04,
+    SRLV   = 0x06,
     JR     = 0x08,
     JALR   = 0x09,
+    MFLO   = 0x12,
+    MULTU  = 0x19,
     ADD    = 0x20,
     ADDU   = 0x21,
+    SUBU   = 0x23,
+    AND    = 0x24,
+    OR     = 0x25,
+    XOR    = 0x26,
     SLT    = 0x2A,
+    SLTU   = 0x2B,
     DSLL   = 0x38,
     DSLL32 = 0x3C,
     DSRA32 = 0x3F,
 };
 
+/// REGIMM
+const Regimm = enum(u32) {
+    BGEZL  = 0x03,
+    BGEZAL = 0x11,
+};
+
+/// COP opcode
+const COP = enum(u32) {
+    MT = 0x04,
+};
+
 /// VR4300i register file
 const RegFile = struct {
     gprs: [32]u64 = undefined,
+
+    lo: u64 = undefined,
+    hi: u64 = undefined,
 
     pc : u64 = undefined,
     npc: u64 = undefined,
@@ -139,7 +168,7 @@ pub var isRunning = true;
 /// Initializes the VR4300i module
 pub fn init(isFastBoot: bool) void {
     if (isFastBoot) {
-        info("[CPU] Fast boot.", .{});
+        //info("[CPU] Fast boot.", .{});
 
         // Simulate PIF ROM
         regs.set64(@enumToInt(CPUReg.T3), 0xFFFFFFFF_A4000040);
@@ -149,7 +178,7 @@ pub fn init(isFastBoot: bool) void {
 
         regs.setPC32(0xA4000040);
     } else {
-        info("[CPU] PIF boot.", .{});
+        //info("[CPU] PIF boot.", .{});
 
         regs.setPC32(0xBFC00000);
     }
@@ -209,6 +238,13 @@ fn read64(addr: u64) u64 {
     return bus.read64(addr);
 }
 
+/// Writes an 8-bit byte to memory
+fn store8(addr: u64, data: u8) void {
+    // TODO: address translation
+
+    bus.write8(addr, data);
+}
+
 /// Writes a 32-bit word to memory
 fn store32(addr: u64, data: u32) void {
     // TODO: address translation
@@ -220,7 +256,7 @@ fn store32(addr: u64, data: u32) void {
 fn fetchInstr() u32 {
     const data = read32(regs.pc);
 
-    // info("{X}h", .{regs.pc});
+    // //info("{X}h", .{regs.pc});
 
     regs.pc  = regs.npc;
     regs.npc +%= 4;
@@ -242,16 +278,38 @@ fn decodeInstr(instr: u32) void {
                 @enumToInt(Special.SLL   ) => iSLL   (instr),
                 @enumToInt(Special.SRL   ) => iSRL   (instr),
                 @enumToInt(Special.SRA   ) => iSRA   (instr),
+                @enumToInt(Special.SLLV  ) => iSLLV  (instr),
+                @enumToInt(Special.SRLV  ) => iSRLV  (instr),
                 @enumToInt(Special.JR    ) => iJR    (instr),
                 @enumToInt(Special.JALR  ) => iJALR  (instr),
+                @enumToInt(Special.MFLO  ) => iMFLO  (instr),
+                @enumToInt(Special.MULTU ) => iMULTU (instr),
                 @enumToInt(Special.ADD   ) => iADD   (instr),
                 @enumToInt(Special.ADDU  ) => iADDU  (instr),
+                @enumToInt(Special.SUBU  ) => iSUBU  (instr),
+                @enumToInt(Special.AND   ) => iAND   (instr),
+                @enumToInt(Special.OR    ) => iOR    (instr),
+                @enumToInt(Special.XOR   ) => iXOR   (instr),
                 @enumToInt(Special.SLT   ) => iSLT   (instr),
+                @enumToInt(Special.SLTU  ) => iSLTU  (instr),
                 @enumToInt(Special.DSLL  ) => iDSLL  (instr),
                 @enumToInt(Special.DSLL32) => iDSLL32(instr),
                 @enumToInt(Special.DSRA32) => iDSRA32(instr),
                 else => {
                     warn("[CPU] Unhandled function {X}h ({X}h).", .{funct, instr});
+
+                    unreachable;
+                }
+            }
+        },
+        @enumToInt(Opcode.REGIMM) => {
+            const regimm = getRt(instr);
+
+            switch (regimm) {
+                @enumToInt(Regimm.BGEZL ) => iBGEZL (instr),
+                @enumToInt(Regimm.BGEZAL) => iBGEZAL(instr),
+                else => {
+                    warn("[CPU] Unhandled REGIMM opcode {X}h ({X}h).", .{regimm, instr});
 
                     unreachable;
                 }
@@ -269,8 +327,21 @@ fn decodeInstr(instr: u32) void {
         @enumToInt(Opcode.ORI   ) => iORI   (instr),
         @enumToInt(Opcode.XORI  ) => iXORI  (instr),
         @enumToInt(Opcode.LUI   ) => iLUI   (instr),
+        @enumToInt(Opcode.COP0  ) => {
+            switch (getRs(instr)) {
+                @enumToInt(COP.MT) => {
+                    iMTC(instr, 0);
+                },
+                else => {
+                    warn("[CPU] Unhandled COP0 opcode {X}h ({X}h).", .{getRs(instr), instr});
+
+                    unreachable;
+                }
+            }
+        },
         @enumToInt(Opcode.BEQL  ) => iBEQL  (instr),
         @enumToInt(Opcode.BNEL  ) => iBNEL  (instr),
+        @enumToInt(Opcode.BLEZL ) => iBLEZL (instr),
         @enumToInt(Opcode.DADDI ) => iDADDI (instr),
         @enumToInt(Opcode.DADDIU) => iDADDIU(instr),
         // @enumToInt(Opcode.LH   ) => iLH   (instr),
@@ -278,7 +349,9 @@ fn decodeInstr(instr: u32) void {
         @enumToInt(Opcode.LBU   ) => iLBU   (instr),
         @enumToInt(Opcode.LHU   ) => iLHU   (instr),
         @enumToInt(Opcode.LWU   ) => iLWU   (instr),
+        @enumToInt(Opcode.SB    ) => iSB    (instr),
         @enumToInt(Opcode.SW    ) => iSW    (instr),
+        @enumToInt(Opcode.CACHE ) => warn("[CPU] Unhandled CACHE instruction.", .{}),
         @enumToInt(Opcode.LD    ) => iLD    (instr),
         else => {
             warn("[CPU] Unhandled opcode {X}h ({X}h).", .{opcode, instr});
@@ -315,17 +388,17 @@ fn iADD(instr: u32) void {
     const rs = getRs(instr);
     const rt = getRt(instr);
 
-    var result: u32 = undefined;
+    var result: i32 = undefined;
 
-    if (@addWithOverflow(u32, @truncate(u32, regs.get(rs)), @truncate(u32, regs.get(rt)), &result)) {
+    if (@addWithOverflow(i32, @bitCast(i32, @truncate(u32, regs.get(rs))), @bitCast(i32, @truncate(u32, regs.get(rt))), &result)) {
         warn("[CPU] ADD overflow.", .{});
 
         unreachable;
     }
 
-    regs.set32(rd, result, true);
+    regs.set32(rd, @bitCast(u32, result), true);
 
-    info("[CPU] ADD ${}, ${}, ${}; ${} = {X}h", .{rd, rs, rt, rd, regs.get(rd)});
+    //info("[CPU] ADD ${}, ${}, ${}; ${} = {X}h", .{rd, rs, rt, rd, regs.get(rd)});
 }
 
 /// ADDI - ADD Immediate
@@ -335,17 +408,17 @@ fn iADDI(instr: u32) void {
     const rs = getRs(instr);
     const rt = getRt(instr);
 
-    var result: u32 = undefined;
+    var result: i32 = undefined;
 
-    if (@addWithOverflow(u32, @truncate(u32, regs.get(rs)), @truncate(u32, imm), &result)) {
-        warn("[CPU] ADDI overflow.", .{});
+    if (@addWithOverflow(i32, @bitCast(i32, @truncate(u32, regs.get(rs))), @bitCast(i32, @truncate(u32, imm)), &result)) {
+        warn("[CPU] ADDI overflow. rs: {X}h, imm: {X}h", .{@truncate(u32, regs.get(rs)), @truncate(u32, imm)});
 
         unreachable;
     }
 
-    regs.set32(rt, result, true);
+    regs.set32(rt, @bitCast(u32, result), true);
 
-    info("[CPU] ADDI ${}, ${}, {X}h; ${} = {X}h", .{rt, rs, imm, rt, regs.get(rt)});
+    //info("[CPU] ADDI ${}, ${}, {X}h; ${} = {X}h", .{rt, rs, imm, rt, regs.get(rt)});
 }
 
 /// ADDIU - ADD Immediate Unsigned
@@ -357,7 +430,7 @@ fn iADDIU(instr: u32) void {
 
     regs.set32(rt, @truncate(u32, regs.get(rs) +% @truncate(u32, imm)), true);
 
-    info("[CPU] ADDIU ${}, ${}, {X}h; ${} = {X}h", .{rt, rs, imm, rt, regs.get(rt)});
+    //info("[CPU] ADDIU ${}, ${}, {X}h; ${} = {X}h", .{rt, rs, imm, rt, regs.get(rt)});
 }
 
 /// ADDU - ADD Unsigned
@@ -368,7 +441,18 @@ fn iADDU(instr: u32) void {
 
     regs.set32(rd, @truncate(u32, regs.get(rs) +% @truncate(u32, regs.get(rt))), true);
 
-    info("[CPU] ADDU ${}, ${}, ${}; ${} = {X}h", .{rd, rs, rt, rd, regs.get(rd)});
+    //info("[CPU] ADDU ${}, ${}, ${}; ${} = {X}h", .{rd, rs, rt, rd, regs.get(rd)});
+}
+
+/// AND - AND
+fn iAND(instr: u32) void {
+    const rd = getRd(instr);
+    const rs = getRs(instr);
+    const rt = getRt(instr);
+
+    regs.set64(rd, regs.get(rs) & regs.get(rt));
+
+    //info("[CPU] AND ${}, ${}, ${}; ${} = {X}h", .{rd, rs, rt, rd, regs.get(rd)});
 }
 
 /// ANDI - AND Immediate
@@ -380,7 +464,7 @@ fn iANDI(instr: u32) void {
 
     regs.set64(rt, regs.get(rs) & imm);
 
-    info("[CPU] ANDI ${}, ${}, {X}h; ${} = {X}h", .{rt, rs, imm, rt, regs.get(rt)});
+    //info("[CPU] ANDI ${}, ${}, {X}h; ${} = {X}h", .{rt, rs, imm, rt, regs.get(rt)});
 }
 
 /// BEQ - Branch on EQual
@@ -394,7 +478,7 @@ fn iBEQ(instr: u32) void {
 
     doBranch(target, regs.get(rs) == regs.get(rt), false, false);
 
-    info("[CPU] BEQ ${}, ${}, {X}h; ${} = {X}h, ${} = {X}h", .{rs, rt, target, rs, regs.get(rs), rt, regs.get(rt)});
+    //info("[CPU] BEQ ${}, ${}, {X}h; ${} = {X}h, ${} = {X}h", .{rs, rt, target, rs, regs.get(rs), rt, regs.get(rt)});
 }
 
 /// BEQL - Branch on EQual Likely
@@ -408,7 +492,46 @@ fn iBEQL(instr: u32) void {
 
     doBranch(target, regs.get(rs) == regs.get(rt), false, true);
 
-    info("[CPU] BEQL ${}, ${}, {X}h; ${} = {X}h, ${} = {X}h", .{rs, rt, target, rs, regs.get(rs), rt, regs.get(rt)});
+    //info("[CPU] BEQL ${}, ${}, {X}h; ${} = {X}h, ${} = {X}h", .{rs, rt, target, rs, regs.get(rs), rt, regs.get(rt)});
+}
+
+/// BGEZAL - Branch on Greater than or Equal Zero And Link
+fn iBGEZAL(instr: u32) void {
+    const offset = exts16(getImm16(instr)) << 2;
+
+    const rs = getRs(instr);
+
+    const target = regs.pc +% offset;
+
+    doBranch(target, @bitCast(i64, regs.get(rs)) >= 0, true, false);
+
+    //info("[CPU] BGEZAL ${}, {X}h; ${} = {X}h", .{rs, target, rs, regs.get(rs)});
+}
+
+/// BGEZL - Branch on Greater than or Equal Zero Likely
+fn iBGEZL(instr: u32) void {
+    const offset = exts16(getImm16(instr)) << 2;
+
+    const rs = getRs(instr);
+
+    const target = regs.pc +% offset;
+
+    doBranch(target, @bitCast(i64, regs.get(rs)) >= 0, false, true);
+
+    //info("[CPU] BGEZL ${}, {X}h; ${} = {X}h", .{rs, target, rs, regs.get(rs)});
+}
+
+/// BLEZL - Branch on Less than or Equal Zero Likely
+fn iBLEZL(instr: u32) void {
+    const offset = exts16(getImm16(instr)) << 2;
+
+    const rs = getRs(instr);
+
+    const target = regs.pc +% offset;
+
+    doBranch(target, @bitCast(i64, regs.get(rs)) <= 0, false, true);
+
+    //info("[CPU] BLEZL ${}, {X}h; ${} = {X}h", .{rs, target, rs, regs.get(rs)});
 }
 
 /// BNE - Branch on Not Equal
@@ -422,7 +545,7 @@ fn iBNE(instr: u32) void {
 
     doBranch(target, regs.get(rs) != regs.get(rt), false, false);
 
-    info("[CPU] BNE ${}, ${}, {X}h; ${} = {X}h, ${} = {X}h", .{rs, rt, target, rs, regs.get(rs), rt, regs.get(rt)});
+    //info("[CPU] BNE ${}, ${}, {X}h; ${} = {X}h, ${} = {X}h", .{rs, rt, target, rs, regs.get(rs), rt, regs.get(rt)});
 
     if (rs == 30 and rt == 0) {
         if (regs.get(rs) == 0) {
@@ -432,8 +555,6 @@ fn iBNE(instr: u32) void {
         {
             info("[CPU] Failed test {}!", .{regs.get(rs)});
         }
-        
-        unreachable;
     }
 }
 
@@ -448,7 +569,7 @@ fn iBNEL(instr: u32) void {
 
     doBranch(target, regs.get(rs) != regs.get(rt), false, true);
 
-    info("[CPU] BNEL ${}, ${}, {X}h; ${} = {X}h, ${} = {X}h", .{rs, rt, target, rs, regs.get(rs), rt, regs.get(rt)});
+    //info("[CPU] BNEL ${}, ${}, {X}h; ${} = {X}h, ${} = {X}h", .{rs, rt, target, rs, regs.get(rs), rt, regs.get(rt)});
 }
 
 /// DADDI - Doubleword ADD Immediate
@@ -468,7 +589,7 @@ fn iDADDI(instr: u32) void {
 
     regs.set64(rt, result);
 
-    info("[CPU] DADDI ${}, ${}, {X}h; ${} = {X}h", .{rt, rs, imm, rt, regs.get(rt)});
+    //info("[CPU] DADDI ${}, ${}, {X}h; ${} = {X}h", .{rt, rs, imm, rt, regs.get(rt)});
 }
 
 /// DADDIU - Doubleword ADD Immediate Unsigned
@@ -480,7 +601,7 @@ fn iDADDIU(instr: u32) void {
 
     regs.set64(rt, regs.get(rs) +% imm);
 
-    info("[CPU] DADDIU ${}, ${}, {X}h; ${} = {X}h", .{rt, rs, imm, rt, regs.get(rt)});
+    //info("[CPU] DADDIU ${}, ${}, {X}h; ${} = {X}h", .{rt, rs, imm, rt, regs.get(rt)});
 }
 
 /// DSLL - Doubleword Shift Left Logical
@@ -492,7 +613,7 @@ fn iDSLL(instr: u32) void {
 
     regs.set64(rd, regs.get(rt) << @truncate(u6, sa));
 
-    info("[CPU] DSLL ${}, ${}, {}; ${} = {X}h", .{rd, rt, sa, rd, regs.get(rd)});
+    //info("[CPU] DSLL ${}, ${}, {}; ${} = {X}h", .{rd, rt, sa, rd, regs.get(rd)});
 }
 
 /// DSLL32 - Doubleword Shift Left Logical + 32
@@ -504,7 +625,7 @@ fn iDSLL32(instr: u32) void {
 
     regs.set64(rd, regs.get(rt) << @truncate(u6, sa + 32));
 
-    info("[CPU] DSLL32 ${}, ${}, {}; ${} = {X}h", .{rd, rt, sa, rd, regs.get(rd)});
+    //info("[CPU] DSLL32 ${}, ${}, {}; ${} = {X}h", .{rd, rt, sa, rd, regs.get(rd)});
 }
 
 /// DSRA32 - Doubleword Shift Right Arithmetic + 32
@@ -516,7 +637,7 @@ fn iDSRA32(instr: u32) void {
 
     regs.set64(rd, @bitCast(u64, @bitCast(i64, regs.get(rt)) >> @truncate(u6, sa + 32)));
 
-    info("[CPU] DSRA32 ${}, ${}, {}; ${} = {X}h", .{rd, rt, sa, rd, regs.get(rd)});
+    //info("[CPU] DSRA32 ${}, ${}, {}; ${} = {X}h", .{rd, rt, sa, rd, regs.get(rd)});
 }
 
 /// J - Jump
@@ -525,7 +646,7 @@ fn iJ(instr: u32) void {
 
     doBranch(target, true, false, false);
 
-    info("[CPU] J {X}h", .{target});
+    //info("[CPU] J {X}h", .{target});
 }
 
 /// JAL - Jump And Link
@@ -534,7 +655,7 @@ fn iJAL(instr: u32) void {
 
     doBranch(target, true, true, false);
 
-    info("[CPU] JAL {X}h", .{target});
+    //info("[CPU] JAL {X}h", .{target});
 }
 
 /// JALR - Jump And Link Register
@@ -545,7 +666,7 @@ fn iJALR(instr: u32) void {
 
     doBranch(target, true, true, false);
 
-    info("[CPU] JALR ${}; PC = {X}h", .{rs, target});
+    //info("[CPU] JALR ${}; PC = {X}h", .{rs, target});
 }
 
 /// JR - Jump Register
@@ -556,7 +677,7 @@ fn iJR(instr: u32) void {
 
     doBranch(target, true, false, false);
 
-    info("[CPU] JR ${}; PC = {X}h", .{rs, target});
+    //info("[CPU] JR ${}; PC = {X}h", .{rs, target});
 }
 
 /// LBU - Load Byte Unsigned
@@ -566,11 +687,11 @@ fn iLBU(instr: u32) void {
     const base = getRs(instr);
     const rt   = getRt(instr);
 
-    const addr = regs.get(base) + imm;
+    const addr = regs.get(base) +% imm;
 
     regs.set64(rt, @intCast(u64, read8(addr)));
 
-    info("[CPU] LWU ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, regs.get(rt)});
+    //info("[CPU] LWU ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, regs.get(rt)});
 }
 
 /// LD - Load Doubleword
@@ -580,11 +701,11 @@ fn iLD(instr: u32) void {
     const base = getRs(instr);
     const rt   = getRt(instr);
 
-    const addr = regs.get(base) + imm;
+    const addr = regs.get(base) +% imm;
 
     regs.set64(rt, read64(addr));
 
-    info("[CPU] LD ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, regs.get(rt)});
+    //info("[CPU] LD ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, regs.get(rt)});
 }
 
 /// LH - Load Halfword
@@ -594,11 +715,11 @@ fn iLH(instr: u32) void {
     const base = getRs(instr);
     const rt   = getRt(instr);
 
-    const addr = regs.get(base) + imm;
+    const addr = regs.get(base) +% imm;
 
     regs.set64(rt, exts16(read16(addr)));
 
-    info("[CPU] LH ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, regs.get(rt)});
+    //info("[CPU] LH ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, regs.get(rt)});
 }
 
 /// LHU - Load Halfword Unsigned
@@ -608,11 +729,11 @@ fn iLHU(instr: u32) void {
     const base = getRs(instr);
     const rt   = getRt(instr);
 
-    const addr = regs.get(base) + imm;
+    const addr = regs.get(base) +% imm;
 
     regs.set64(rt, @intCast(u64, read16(addr)));
 
-    info("[CPU] LHU ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, regs.get(rt)});
+    //info("[CPU] LHU ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, regs.get(rt)});
 }
 
 /// LUI - Load Upper Immediate
@@ -623,7 +744,7 @@ fn iLUI(instr: u32) void {
 
     regs.set64(rt, exts16(imm) << 16);
 
-    info("[CPU] LUI ${}, {X}h; ${} = {X}h", .{rt, imm, rt, regs.get(rt)});
+    //info("[CPU] LUI ${}, {X}h; ${} = {X}h", .{rt, imm, rt, regs.get(rt)});
 }
 
 /// LW - Load Word
@@ -633,11 +754,11 @@ fn iLW(instr: u32) void {
     const base = getRs(instr);
     const rt   = getRt(instr);
 
-    const addr = regs.get(base) + imm;
+    const addr = regs.get(base) +% imm;
 
     regs.set32(rt, read32(addr), true);
 
-    info("[CPU] LW ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, regs.get(rt)});
+    //info("[CPU] LW ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, regs.get(rt)});
 }
 
 /// LWU - Load Word Unsigned
@@ -651,9 +772,55 @@ fn iLWU(instr: u32) void {
 
     regs.set64(rt, @intCast(u64, read32(addr)));
 
-    info("[CPU] LWU ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, regs.get(rt)});
+    //info("[CPU] LWU ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, regs.get(rt)});
 }
 
+/// MFLO - Move From LO
+fn iMFLO(instr: u32) void {
+    const rd = getRd(instr);
+
+    regs.set64(rd, regs.lo);
+
+    //info("[CPU] MFLO ${}; ${} = {X}h", .{rd, rd, regs.get(rd)});
+}
+
+/// MTC - Move To Coprocessor
+fn iMTC(instr: u32, copN: comptime i32) void {
+    const rd = getRd(instr);
+    const rt = getRt(instr);
+
+    const data = @truncate(u32, regs.get(rt));
+
+    if (copN == 0) {
+        cop0.set32(rd, data);
+
+        //info("[CPU] MTC0 ${}, ${}; ${} = {X}h", .{rt, rd, rd, data});
+    }
+}
+
+/// MULTU - MULTply Unsigned
+fn iMULTU(instr: u32) void {
+    const rs = getRs(instr);
+    const rt = getRt(instr);
+
+    const result = @intCast(u64, @truncate(u32, regs.get(rs))) * @intCast(u64, @truncate(u32, regs.get(rt)));
+
+    regs.lo = exts32(@truncate(u32, result >>  0));
+    regs.hi = exts32(@truncate(u32, result >> 32));
+
+    //info("[CPU] MULTU ${}, ${}; HI = {X}h, LO = {X}h", .{rs, rt, regs.hi, regs.lo});
+}
+
+/// OR - OR
+fn iOR(instr: u32) void {
+    const rd = getRd(instr);
+    const rs = getRs(instr);
+    const rt = getRt(instr);
+
+    regs.set64(rd, regs.get(rs) | regs.get(rt));
+
+    //info("[CPU] OR ${}, ${}, ${}; ${} = {X}h", .{rd, rs, rt, rd, regs.get(rd)});
+}
 
 /// ORI - OR Immediate
 fn iORI(instr: u32) void {
@@ -664,7 +831,21 @@ fn iORI(instr: u32) void {
 
     regs.set64(rt, regs.get(rs) | imm);
 
-    info("[CPU] ORI ${}, ${}, {X}h; ${} = {X}h", .{rt, rs, imm, rt, regs.get(rt)});
+    //info("[CPU] ORI ${}, ${}, {X}h; ${} = {X}h", .{rt, rs, imm, rt, regs.get(rt)});
+}
+
+/// SB - Store BYte
+fn iSB(instr: u32) void {
+    const imm = exts16(getImm16(instr));
+
+    const base = getRs(instr);
+    const rt   = getRt(instr);
+
+    const addr = regs.get(base) +% imm;
+
+    store8(addr, @truncate(u8, regs.get(rt)));
+
+    //info("[CPU] SB ${}, ${}({}); ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), addr, @truncate(u8, regs.get(rt))});
 }
 
 /// SLL - Shift Left Logical
@@ -677,10 +858,21 @@ fn iSLL(instr: u32) void {
     regs.set32(rd, @truncate(u32, regs.get(rt)) << @truncate(u5, sa), true);
 
     if (rd == @enumToInt(CPUReg.R0)) {
-        info("[CPU] NOP", .{});
+        //info("[CPU] NOP", .{});
     } else {
-        info("[CPU] SLL ${}, ${}, {}; ${} = {X}h", .{rd, rt, sa, rd, regs.get(rd)});
+        //info("[CPU] SLL ${}, ${}, {}; ${} = {X}h", .{rd, rt, sa, rd, regs.get(rd)});
     }
+}
+
+/// SLLV - Shift Right Logical Variable
+fn iSLLV(instr: u32) void {
+    const rd = getRd(instr);
+    const rs = getRs(instr);
+    const rt = getRt(instr);
+
+    regs.set32(rd, @truncate(u32, regs.get(rt)) << @truncate(u5, regs.get(rs)), true);
+
+    //info("[CPU] SLLV ${}, ${}, ${}; ${} = {X}h", .{rd, rt, rs, rd, regs.get(rd)});
 }
 
 /// SLT - Set on Less Than
@@ -691,7 +883,7 @@ fn iSLT(instr: u32) void {
 
     regs.set64(rd, @intCast(u64, @bitCast(u1, @bitCast(i64, regs.get(rs)) < @bitCast(i64, regs.get(rt)))));
 
-    info("[CPU] SLT ${}, ${}, ${}; ${} = {X}h", .{rd, rs, rt, rd, regs.get(rd)});
+    //info("[CPU] SLT ${}, ${}, ${}; ${} = {X}h", .{rd, rs, rt, rd, regs.get(rd)});
 }
 
 /// SLTI - Set on Less Than Immediate
@@ -703,7 +895,7 @@ fn iSLTI(instr: u32) void {
 
     regs.set64(rt, @intCast(u64, @bitCast(u1, @bitCast(i64, regs.get(rs)) < @bitCast(i64, imm))));
 
-    info("[CPU] SLTI ${}, ${}, {X}h; ${} = {X}h", .{rt, rs, imm, rt, regs.get(rt)});
+    //info("[CPU] SLTI ${}, ${}, {X}h; ${} = {X}h", .{rt, rs, imm, rt, regs.get(rt)});
 }
 
 /// SLTIU - Set on Less Than Immediate
@@ -715,7 +907,18 @@ fn iSLTIU(instr: u32) void {
 
     regs.set64(rt, @intCast(u64, @bitCast(u1, regs.get(rs) < imm)));
 
-    info("[CPU] SLTIU ${}, ${}, {X}h; ${} = {X}h", .{rt, rs, imm, rt, regs.get(rt)});
+    //info("[CPU] SLTIU ${}, ${}, {X}h; ${} = {X}h", .{rt, rs, imm, rt, regs.get(rt)});
+}
+
+/// SLTU - Set on Less Than Unsigned
+fn iSLTU(instr: u32) void {
+    const rd = getRd(instr);
+    const rs = getRs(instr);
+    const rt = getRt(instr);
+
+    regs.set64(rd, @intCast(u64, @bitCast(u1, regs.get(rs) < regs.get(rt))));
+
+    //info("[CPU] SLTU ${}, ${}, ${}; ${} = {X}h", .{rd, rs, rt, rd, regs.get(rd)});
 }
 
 /// SRA - Shift Right Arithmetic
@@ -727,7 +930,7 @@ fn iSRA(instr: u32) void {
 
     regs.set32(rd, @truncate(u32, @bitCast(u64, @bitCast(i64, regs.get(rt)) >> @truncate(u6, sa))), true);
 
-    info("[CPU] SRA ${}, ${}, {}; ${} = {X}h", .{rd, rt, sa, rd, regs.get(rd)});
+    //info("[CPU] SRA ${}, ${}, {}; ${} = {X}h", .{rd, rt, sa, rd, regs.get(rd)});
 }
 
 /// SRL - Shift Right Logical
@@ -739,7 +942,29 @@ fn iSRL(instr: u32) void {
 
     regs.set32(rd, @truncate(u32, regs.get(rt)) >> @truncate(u5, sa), true);
 
-    info("[CPU] SRL ${}, ${}, {}; ${} = {X}h", .{rd, rt, sa, rd, regs.get(rd)});
+    //info("[CPU] SRL ${}, ${}, {}; ${} = {X}h", .{rd, rt, sa, rd, regs.get(rd)});
+}
+
+/// SRLV - Shift Right Logical Variable
+fn iSRLV(instr: u32) void {
+    const rd = getRd(instr);
+    const rs = getRs(instr);
+    const rt = getRt(instr);
+
+    regs.set32(rd, @truncate(u32, regs.get(rt)) >> @truncate(u5, regs.get(rs)), true);
+
+    //info("[CPU] SRLV ${}, ${}, ${}; ${} = {X}h", .{rd, rt, rs, rd, regs.get(rd)});
+}
+
+/// SUBU - SUB Unsigned
+fn iSUBU(instr: u32) void {
+    const rd = getRd(instr);
+    const rs = getRs(instr);
+    const rt = getRt(instr);
+
+    regs.set32(rd, @truncate(u32, regs.get(rs) -% @truncate(u32, regs.get(rt))), true);
+
+    //info("[CPU] SUBU ${}, ${}, ${}; ${} = {X}h", .{rd, rs, rt, rd, regs.get(rd)});
 }
 
 /// SW - Store Word
@@ -749,11 +974,22 @@ fn iSW(instr: u32) void {
     const base = getRs(instr);
     const rt   = getRt(instr);
 
-    const addr = regs.get(base) + imm;
+    const addr = regs.get(base) +% imm;
 
     store32(addr, @truncate(u32, regs.get(rt)));
 
-    info("[CPU] SW ${}, ${}({}); ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), addr, @truncate(u32, regs.get(rt))});
+    //info("[CPU] SW ${}, ${}({}); ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), addr, @truncate(u32, regs.get(rt))});
+}
+
+/// XOR - XOR
+fn iXOR(instr: u32) void {
+    const rd = getRd(instr);
+    const rs = getRs(instr);
+    const rt = getRt(instr);
+
+    regs.set64(rd, regs.get(rs) ^ regs.get(rt));
+
+    //info("[CPU] XOR ${}, ${}, ${}; ${} = {X}h", .{rd, rs, rt, rd, regs.get(rd)});
 }
 
 /// XORI - XOR Immediate
@@ -765,18 +1001,14 @@ fn iXORI(instr: u32) void {
 
     regs.set64(rt, regs.get(rs) ^ imm);
 
-    info("[CPU] XORI ${}, ${}, {X}h; ${} = {X}h", .{rt, rs, imm, rt, regs.get(rt)});
+    //info("[CPU] XORI ${}, ${}, {X}h; ${} = {X}h", .{rt, rs, imm, rt, regs.get(rt)});
 }
 
 /// Steps the CPU module, returns elapsed cycles
-pub fn step() i32 {
+pub fn step() i64 {
     const instr = fetchInstr();
 
     decodeInstr(instr);
 
-    if (regs.pc == 0xFFFFFFFF_800012E0) {
-        isRunning = false;
-    }
-
-    return 1;
+    return 4;
 }

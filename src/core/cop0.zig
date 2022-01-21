@@ -43,18 +43,18 @@ const COP0Reg = enum(u32) {
     R31         = 31,
 };
 
-const COP0 = struct {
-    pub fn init(self: COP0) void {
-        self.set32(@enumToInt(COP0Reg.Random), 0x0000001F);
-        self.set32(@enumToInt(COP0Reg.Status), 0x70400004);
-        self.set32(@enumToInt(COP0Reg.PRID  ), 0x00000B00);
-        self.set32(@enumToInt(COP0Reg.Config), 0x0006E463);
-    }
+pub fn init(self: COP0) void {
+    self.set32(@enumToInt(COP0Reg.Random), 0x0000001F);
+    self.set32(@enumToInt(COP0Reg.Status), 0x70400004);
+    self.set32(@enumToInt(COP0Reg.PRID  ), 0x00000B00);
+    self.set32(@enumToInt(COP0Reg.Config), 0x0006E463);
+}
 
-    pub fn get32(self: COP0, idx: u32) u64 {
-        return 0;
-    }
+pub fn get32(idx: u32) u32 {
+    std.log.warn("[COP0] Read {s}.", .{@tagName(@intToEnum(COP0Reg, idx))});
+    return 0;
+}
 
-    pub fn set32(self: COP0, idx: u32, data: u32) void {
-    }
+pub fn set32(idx: u32, data: u32) void {
+    std.log.warn("[COP0] Write {s}, data: {X}h.", .{@tagName(@intToEnum(COP0Reg, idx)), data});
 }

@@ -33,11 +33,15 @@ const VIControl = packed struct {
     _pad3  : u16 = 0,
 };
 
-var viControl = VIControl{};
-var viOrigin : u32 = undefined;
+pub var viControl = VIControl{};
+var viOrigin : u32 = 0;
 
 pub fn init() void {
 
+}
+
+pub fn getOrigin() usize {
+    return @intCast(usize, viOrigin);
 }
 
 pub fn write32(pAddr: u64, data: u32) void {
