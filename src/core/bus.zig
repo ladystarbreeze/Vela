@@ -214,6 +214,15 @@ pub fn read32(pAddr: u64) u32 {
         @enumToInt(MemoryRegion.VI) => {
             return vi.read32(pAddr_);
         },
+        @enumToInt(MemoryRegion.AI) => {
+            switch (pAddr_ & 0xF_FFFF) {
+                else => {
+                    std.log.warn("[Bus] Unhandled read32 @ pAddr {X}h (Audio Interface).", .{pAddr_});
+
+                    data = 0;
+                }
+            }
+        },
         @enumToInt(MemoryRegion.PI) => {
             switch (pAddr_ & 0xF_FFFF) {
                 @enumToInt(PIReg.PIStatus) => {

@@ -77,8 +77,10 @@ const Opcode = enum(u32) {
     SH     = 0x29,
     SW     = 0x2B,
     CACHE  = 0x2F,
+    LWC1   = 0x31,
     LDC1   = 0x35,
     LD     = 0x37,
+    SDC1   = 0x3D,
     SD     = 0x3F,
 };
 
@@ -97,6 +99,7 @@ const Special = enum(u32) {
     MTLO   = 0x13,
     MULT   = 0x18,
     MULTU  = 0x19,
+    DIV    = 0x1A,
     DIVU   = 0x1B,
     ADD    = 0x20,
     ADDU   = 0x21,
@@ -104,6 +107,7 @@ const Special = enum(u32) {
     AND    = 0x24,
     OR     = 0x25,
     XOR    = 0x26,
+    NOR    = 0x27,
     SLT    = 0x2A,
     SLTU   = 0x2B,
     DADD   = 0x2C,
@@ -126,18 +130,36 @@ const COP = enum(u32) {
     CF = 0x02,
     MT = 0x04,
     CT = 0x06,
+    BC = 0x08,
     CO = 0x10,
+};
+
+/// BC opcode
+const BC = enum(u32) {
+    BCF, BCT, BCFL, BCTL,
 };
 
 /// COP1 Opcode
 const COP1 = enum(u32) {
+    S = 0x10,
+    D = 0x11,
     W = 0x14,
-}
+};
 
 /// CO function
 const CO = enum(u32) {
     TLBWI = 0x02,
     ERET  = 0x18,
+};
+
+/// COP1 function
+const CO1 = enum(u32) {
+    ADD     = 0x00,
+    DIV     = 0x03,
+    TRUNC_W = 0x0D,
+    CVT_S   = 0x20,
+    CVT_D   = 0x21,
+    C       = 0x30,
 };
 
 /// VR4300i register file
@@ -228,8 +250,6 @@ fn getImm16(instr: u32) u16 {
 fn getRd(instr: u32) u32 {
     return (instr >> 11) & 0x1F;
 }
-
-const getFs = getRd;
 
 fn getRs(instr: u32) u32 {
     return (instr >> 21) & 0x1F;
@@ -378,6 +398,7 @@ fn decodeInstr(instr: u32) void {
                 @enumToInt(Special.MTLO  ) => iMTLO  (instr),
                 @enumToInt(Special.MULT  ) => iMULT  (instr),
                 @enumToInt(Special.MULTU ) => iMULTU (instr),
+                @enumToInt(Special.DIV   ) => iDIV   (instr),
                 @enumToInt(Special.DIVU  ) => iDIVU  (instr),
                 @enumToInt(Special.ADD   ) => iADD   (instr),
                 @enumToInt(Special.ADDU  ) => iADDU  (instr),
@@ -385,6 +406,7 @@ fn decodeInstr(instr: u32) void {
                 @enumToInt(Special.AND   ) => iAND   (instr),
                 @enumToInt(Special.OR    ) => iOR    (instr),
                 @enumToInt(Special.XOR   ) => iXOR   (instr),
+                @enumToInt(Special.NOR   ) => iNOR   (instr),
                 @enumToInt(Special.SLT   ) => iSLT   (instr),
                 @enumToInt(Special.SLTU  ) => iSLTU  (instr),
                 @enumToInt(Special.DADD  ) => iDADD  (instr),
@@ -457,11 +479,75 @@ fn decodeInstr(instr: u32) void {
             if (!checkCOPUsable(1)) return;
 
             switch (getRs(instr)) {
+                @enumToInt(COP.MF) => iMFC(instr, 1),
                 @enumToInt(COP.CF) => iCFC(instr, 1),
                 @enumToInt(COP.MT) => iMTC(instr, 1),
                 @enumToInt(COP.CT) => iCTC(instr, 1),
-                @enumToInt(COP1.W) => {
+                @enumToInt(COP.BC) => {
+                    const funct = getRt(instr);
 
+                    switch (funct) {
+                        @enumToInt(BC.BCF ) => iBC(instr, false, false, 1),
+                        @enumToInt(BC.BCT ) => iBC(instr, true , false, 1),
+                        @enumToInt(BC.BCFL) => iBC(instr, false, true , 1),
+                        @enumToInt(BC.BCTL) => iBC(instr, true , true , 1),
+                        else => {
+                            warn("[CPU] Unhandled BC1 opcode {X}h ({X}h).", .{funct, instr});
+
+                            @panic("unhandled BC1 opcode");
+                        }
+                    }
+                },
+                @enumToInt(COP1.S) => {
+                    const Fmt = cop1.Fmt;
+
+                    const funct = instr & 0x3F;
+
+                    switch (funct) {
+                        @enumToInt(CO1.ADD    ) => cop1.fADD    (instr, Fmt.S),
+                        @enumToInt(CO1.DIV    ) => cop1.fDIV    (instr, Fmt.S),
+                        @enumToInt(CO1.TRUNC_W) => cop1.fTRUNC_W(instr, Fmt.S),
+                        // @enumToInt(CO1.CVT_S  ) => cop1.fCVT_S   (instr, Fmt.S),
+                        // @enumToInt(CO1.CVT_D  ) => cop1.fCVT_D   (instr, Fmt.S),
+                        @enumToInt(CO1.C) ... @enumToInt(CO1.C) + 0xF => {
+                            cop1.fC(instr, @truncate(u4, instr), Fmt.S);
+                        },
+                        else => {
+                            warn("[CPU] Unhandled CO1(S) function {X}h ({X}h).", .{funct, instr});
+
+                            @panic("unhandled CO1(S) function");
+                        }
+                    }
+                },
+                @enumToInt(COP1.D) => {
+                    const Fmt = cop1.Fmt;
+
+                    const funct = instr & 0x3F;
+
+                    switch (funct) {
+                        @enumToInt(CO1.CVT_S) => cop1.fCVT_S(instr, Fmt.D),
+                        // @enumToInt(CO1.CVT_D) => cop1.fCVT_D(instr, Fmt.D),
+                        else => {
+                            warn("[CPU] Unhandled CO1(D) function {X}h ({X}h).", .{funct, instr});
+
+                            @panic("unhandled CO1(D) function");
+                        }
+                    }
+                },
+                @enumToInt(COP1.W) => {
+                    const Fmt = cop1.Fmt;
+
+                    const funct = instr & 0x3F;
+
+                    switch (funct) {
+                        @enumToInt(CO1.CVT_S) => cop1.fCVT_S(instr, Fmt.W),
+                        @enumToInt(CO1.CVT_D) => cop1.fCVT_D(instr, Fmt.W),
+                        else => {
+                            warn("[CPU] Unhandled CO1(W) function {X}h ({X}h).", .{funct, instr});
+
+                            @panic("unhandled CO1(W) function");
+                        }
+                    }
                 },
                 else => {
                     warn("[CPU] Unhandled COP1 opcode {X}h ({X}h).", .{getRs(instr), instr});
@@ -487,8 +573,10 @@ fn decodeInstr(instr: u32) void {
         @enumToInt(Opcode.CACHE ) => {
             //warn("[CPU] Unhandled CACHE instruction.", .{});
         },
+        @enumToInt(Opcode.LWC1  ) => iLWC1  (instr),
         @enumToInt(Opcode.LDC1  ) => iLDC1  (instr),
         @enumToInt(Opcode.LD    ) => iLD    (instr),
+        @enumToInt(Opcode.SDC1  ) => iSDC1  (instr),
         @enumToInt(Opcode.SD    ) => iSD    (instr),
         else => {
             warn("[CPU] Unhandled opcode {X}h ({X}h).", .{opcode, instr});
@@ -602,6 +690,43 @@ fn iANDI(instr: u32) void {
     regs.set64(rt, regs.get(rs) & imm);
 
     if (isDisasm) info("[CPU] ANDI ${}, ${}, {X}h; ${} = {X}h", .{rt, rs, imm, rt, regs.get(rt)});
+}
+
+/// Branch On Coprocessor z
+fn iBC(instr: u32, isTrue: comptime bool, isLikely: comptime bool, comptime copN: comptime_int) void {
+    const offset = exts16(getImm16(instr)) << 2;
+
+    const target = regs.pc +% offset;
+
+    var coc: bool = undefined;
+
+    if (copN == 1) {
+        coc = cop1.coc1;
+    } else {
+        @panic("bc: unhandled copN");
+    }
+
+    if (isTrue) {
+        if (isLikely) {
+            doBranch(target, coc, false, true);
+
+            if (isDisasm) info("[CPU] BC{}TL, {X}h", .{copN, target});
+        } else {
+            doBranch(target, coc, false, false);
+
+            if (isDisasm) info("[CPU] BC{}T, {X}h", .{copN, target});
+        }
+    } else {
+        if (isLikely) {
+            doBranch(target, !coc, false, true);
+
+            if (isDisasm) info("[CPU] BC{}FL, {X}h", .{copN, target});
+        } else {
+            doBranch(target, !coc, false, false);
+
+            if (isDisasm) info("[CPU] BC{}F, {X}h", .{copN, target});
+        }
+    }
 }
 
 /// BEQ - Branch on EQual
@@ -834,6 +959,35 @@ fn iDADDU(instr: u32) void {
     if (isDisasm) info("[CPU] DADDU ${}, ${}, ${}; ${} = {X}h", .{rd, rs, rt, rd, regs.get(rd)});
 }
 
+/// DIV - DIVide
+fn iDIV(instr: u32) void {
+    const rs = getRs(instr);
+    const rt = getRt(instr);
+
+    const n = @bitCast(i32, @truncate(u32, regs.get(rs)));
+    const d = @bitCast(i32, @truncate(u32, regs.get(rt)));
+
+    if (d == 0) {
+        warn("[CPU] DIV by zero.", .{});
+
+        if (n < 0) {
+            regs.lo = 1;
+        } else {
+            regs.lo = 0xFFFFFFFF_FFFFFFFF;
+        }
+
+        regs.hi = exts32(@bitCast(u32, n));
+    } else if (n == -0x80000000 and d == -1) {
+        regs.lo = 0xFFFFFFFF_80000000;
+        regs.hi = 0;
+    } else {
+        regs.lo = exts32(@bitCast(u32, @divFloor(n, d)));
+        regs.hi = exts32(@bitCast(u32, @rem(n, d)));
+    }
+
+    if (isDisasm) info("[CPU] DIV ${}, ${}; HI = {X}h, LO = {X}h", .{rs, rt, regs.hi, regs.lo});
+}
+
 /// DIVU - DIVide Unsigned
 fn iDIVU(instr: u32) void {
     const rs = getRs(instr);
@@ -846,7 +1000,7 @@ fn iDIVU(instr: u32) void {
         warn("[CPU] DIVU by zero.", .{});
 
         regs.lo = 0xFFFFFFFF_FFFFFFFF;
-        regs.hi = n;
+        regs.hi = exts32(n);
     } else {
         regs.lo = exts32(n / d);
         regs.hi = exts32(n % d);
@@ -1003,7 +1157,7 @@ fn iLDC1(instr: u32) void {
 
     cop1.setFGR64(rt, read64(addr));
 
-    if (isDisasm) info("[CPU] LDC1 ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, regs.get(rt)});
+    if (isDisasm) info("[CPU] LDC1 ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, cop1.getFGR64(rt)});
 }
 
 /// LH - Load Halfword
@@ -1059,6 +1213,22 @@ fn iLW(instr: u32) void {
     if (isDisasm) info("[CPU] LW ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, regs.get(rt)});
 }
 
+/// LWC1 - Load Word Coprocessor 1
+fn iLWC1(instr: u32) void {
+    if (!checkCOPUsable(1)) return;
+
+    const imm = exts16(getImm16(instr));
+
+    const base = getRs(instr);
+    const rt   = getRt(instr);
+
+    const addr = regs.get(base) +% imm;
+
+    cop1.setFGR32(rt, read32(addr));
+
+    if (isDisasm) info("[CPU] LWC1 ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, cop1.getFGR32(rt)});
+}
+
 /// LWU - Load Word Unsigned
 fn iLWU(instr: u32) void {
     const imm = exts16(getImm16(instr));
@@ -1082,9 +1252,11 @@ fn iMFC(instr: u32, copN: comptime i32) void {
 
     if (copN == 0) {
         regs.set32(rt, cop0.get32(rd), true);
-
-        if (isDisasm) info("[CPU] MFC0 ${}, ${}; ${} = {X}h", .{rt, rd, rd, data});
+    } else if (copN == 1) {
+        regs.set32(rt, cop1.getFGR32(rd), true);
     }
+
+    if (isDisasm) info("[CPU] MFC{} ${}, ${}; ${} = {X}h", .{copN, rt, rd, rd, data});
 }
 
 /// MFHI - Move From HI
@@ -1169,6 +1341,17 @@ fn iMULTU(instr: u32) void {
     if (isDisasm) info("[CPU] MULTU ${}, ${}; HI = {X}h, LO = {X}h", .{rs, rt, regs.hi, regs.lo});
 }
 
+/// NOR - NOR
+fn iNOR(instr: u32) void {
+    const rd = getRd(instr);
+    const rs = getRs(instr);
+    const rt = getRt(instr);
+
+    regs.set64(rd, ~regs.get(rs) | regs.get(rt));
+
+    if (isDisasm) info("[CPU] NOR ${}, ${}, ${}; ${} = {X}h", .{rd, rs, rt, rd, regs.get(rd)});
+}
+
 /// OR - OR
 fn iOR(instr: u32) void {
     const rd = getRd(instr);
@@ -1217,7 +1400,22 @@ fn iSD(instr: u32) void {
 
     store64(addr, regs.get(rt));
 
-    if (isDisasm) info("[CPU] SD ${}, ${}({}); ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), addr, @truncate(u32, regs.get(rt))});
+    if (isDisasm) info("[CPU] SD ${}, ${}({}); ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), addr, regs.get(rt)});
+}
+/// SDC1 - Store Doubleword Coprocessor 1
+fn iSDC1(instr: u32) void {
+    if (!checkCOPUsable(1)) return;
+
+    const imm = exts16(getImm16(instr));
+
+    const base = getRs(instr);
+    const rt   = getRt(instr);
+
+    const addr = regs.get(base) +% imm;
+
+    store64(addr, cop1.getFGR64(rt));
+
+    if (isDisasm) info("[CPU] SDC1 ${}, ${}({}); ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), addr, cop1.getFGR64(rt)});
 }
 
 /// SH - Store Halfword
