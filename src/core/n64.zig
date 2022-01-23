@@ -12,9 +12,20 @@ const bus = @import("bus.zig");
 const cpu = @import("cpu.zig");
 const vi  = @import("vi.zig");
 
+const Screen = struct {
+    width : c_int = undefined,
+    height: c_int = undefined,
+    stride: c_int = undefined,
+
+    texture : ?*SDL.SDL_Texture  = null,
+    renderer: ?*SDL.SDL_Renderer = null,
+};
+
 const isFastBoot = true;
 
 const cpuCyclesFrame: i64 = 93_750_000 / 60;
+
+var screen: Screen = Screen{};
 
 /// Initializes all submodules
 /// TODO: this is terrible clean this up
@@ -27,28 +38,21 @@ pub fn run(romPath: []const u8) anyerror!void {
     var window = SDL.SDL_CreateWindow(
         "Vela",
         SDL.SDL_WINDOWPOS_CENTERED, SDL.SDL_WINDOWPOS_CENTERED,
-        640, 480,
+        960, 720,
         SDL.SDL_WINDOW_SHOWN,
     ) orelse sdlPanic();
     defer _ = SDL.SDL_DestroyWindow(window);
 
-    var renderer = SDL.SDL_CreateRenderer(window, -1, SDL.SDL_RENDERER_ACCELERATED) orelse sdlPanic();
-    defer _ = SDL.SDL_DestroyRenderer(renderer);
+    screen.renderer = SDL.SDL_CreateRenderer(window, -1, SDL.SDL_RENDERER_ACCELERATED) orelse sdlPanic();
+    defer _ = SDL.SDL_DestroyRenderer(screen.renderer);
 
-    if (SDL.SDL_RenderSetLogicalSize(renderer, 640, 480) < 0) {
+    if (SDL.SDL_RenderSetLogicalSize(screen.renderer, 960, 720) < 0) {
         sdlPanic();
     }
 
     if(SDL.SDL_SetHint(SDL.SDL_HINT_RENDER_VSYNC, "1") < 0) {
         sdlPanic();
     }
-
-    var texture = SDL.SDL_CreateTexture(
-        renderer,
-        SDL.SDL_PIXELFORMAT_XBGR8888, SDL.SDL_TEXTUREACCESS_STREAMING,
-        320, 240
-    ) orelse sdlPanic();
-    defer _ = SDL.SDL_DestroyTexture(texture);
 
     // Get allocator
     var alloc = std.heap.page_allocator;
@@ -60,6 +64,8 @@ pub fn run(romPath: []const u8) anyerror!void {
     cpu.init(isFastBoot);
 
     SDL.SDL_ShowWindow(window);
+
+    changeScreen(320, 3);
 
     var cyclesRem: i64 = cpuCyclesFrame;
 
@@ -77,16 +83,50 @@ pub fn run(romPath: []const u8) anyerror!void {
                 }
             }
 
-            if (SDL.SDL_UpdateTexture(texture, null, @ptrCast(*u8, &bus.ram[vi.getOrigin()]), 320 * 4) < 0) {
+            if (SDL.SDL_UpdateTexture(screen.texture, null, @ptrCast(*u8, &bus.ram[vi.getOrigin()]), screen.width * screen.stride) < 0) {
                 sdlPanic();
             }
 
-            if (SDL.SDL_RenderCopy(renderer, texture, null, null) < 0) {
+            if (SDL.SDL_RenderCopy(screen.renderer, screen.texture, null, null) < 0) {
                 sdlPanic();
             }
 
-            SDL.SDL_RenderPresent(renderer);
+            SDL.SDL_RenderPresent(screen.renderer);
         }
+    }
+
+    var x = SDL.SDL_DestroyTexture(screen.texture);
+}
+
+pub fn changeScreen(width: c_int, pFmt: u2) void {
+    if (width == 320) {
+        screen.height = 240;
+    } else if (width == 640) {
+        screen.height = 480;
+    } else {
+        unreachable;
+    }
+    
+    screen.width = width;
+
+    if (pFmt == 2) {
+        screen.stride = 2;
+
+        screen.texture = SDL.SDL_CreateTexture(
+            screen.renderer,
+            SDL.SDL_PIXELFORMAT_XBGR1555, SDL.SDL_TEXTUREACCESS_STREAMING,
+            screen.width, screen.height
+        ) orelse sdlPanic();
+    }
+    else if (pFmt == 3) {
+        screen.stride = 4;
+
+        screen.texture = SDL.SDL_CreateTexture(
+            screen.renderer,
+            SDL.SDL_PIXELFORMAT_XBGR8888, SDL.SDL_TEXTUREACCESS_STREAMING,
+            screen.width, screen.height
+        ) orelse sdlPanic();
+    } else {
     }
 }
 

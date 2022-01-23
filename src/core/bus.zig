@@ -211,6 +211,9 @@ pub fn read32(pAddr: u64) u32 {
                 }
             }
         },
+        @enumToInt(MemoryRegion.VI) => {
+            return vi.read32(pAddr_);
+        },
         @enumToInt(MemoryRegion.PI) => {
             switch (pAddr_ & 0xF_FFFF) {
                 @enumToInt(PIReg.PIStatus) => {
@@ -220,8 +223,6 @@ pub fn read32(pAddr: u64) u32 {
                 },
                 else => {
                     std.log.warn("[Bus] Unhandled read32 @ pAddr {X}h (Peripheral Interface).", .{pAddr_});
-
-                    unreachable;
                 }
             }
         },
@@ -234,9 +235,30 @@ pub fn read32(pAddr: u64) u32 {
                 }
             }
         },
+        @enumToInt(MemoryRegion.SI) => {
+            switch (pAddr_ & 0xF_FFFF) {
+                else => {
+                    std.log.warn("[Bus] Unhandled read32 @ pAddr {X}h (Serial Interface).", .{pAddr_});
+
+                    data = 0;
+                }
+            }
+        },
         @enumToInt(MemoryRegion.CartS) ... @enumToInt(MemoryRegion.CartE) => {
             @memcpy(@ptrCast([*]u8, &data), @ptrCast([*]u8, &rom[pAddr_ - 0x1000_0000]), 4);
             data = @byteSwap(u32, data);
+        },
+        @enumToInt(MemoryRegion.PIF) => {
+            if (pAddr_ >= 0x1FC0_07C0 and pAddr_ < 0x1FC0_0800) {
+                std.log.info("[Bus] Read32 @ pAddr {X}h (PIF RAM).", .{pAddr_});
+
+                @memcpy(@ptrCast([*]u8, &data), @ptrCast([*]u8, &pifRAM[pAddr_ - 0x1FC0_07C0]), 4);
+                data = @byteSwap(u32, data);
+            } else {
+                std.log.warn("[Bus] Unhandled write32 @ pAddr {X}h (PIF), data: {X}h.", .{pAddr_, data});
+
+                unreachable;
+            }
         },
         else => {
             std.log.warn("[Bus] Unhandled read32 @ pAddr {X}h.", .{pAddr_});
@@ -272,6 +294,9 @@ pub fn write8(pAddr: u64, data: u8) void {
     const pAddr_ = pAddr & 0x1FFF_FFFF;
 
     switch (pAddr_ >> 20) {
+        @enumToInt(MemoryRegion.RDRAM0) ... @enumToInt(MemoryRegion.RDRAM7) => {
+            ram[pAddr_ & 0x7F_FFFF] = data;
+        },
         @enumToInt(MemoryRegion.RSP) => {
             switch ((pAddr_ >> 12) & 0xFF) {
                 0x01 => {
@@ -284,6 +309,23 @@ pub fn write8(pAddr: u64, data: u8) void {
         },
         else => {
             std.log.warn("[Bus] Unhandled write8 @ pAddr {X}h, data: {X}h.", .{pAddr_, data});
+
+            unreachable;
+        }
+    }
+}
+
+pub fn write16(pAddr: u64, data: u16) void {
+    const pAddr_ = pAddr & 0x1FFF_FFFE;
+
+    switch (pAddr_ >> 20) {
+        @enumToInt(MemoryRegion.RDRAM0) ... @enumToInt(MemoryRegion.RDRAM7) => {
+            const data_ = @byteSwap(u16, data);
+
+            @memcpy(@ptrCast([*]u8, &ram[pAddr_ & 0x7F_FFFF]), @ptrCast([*]const u8, &data_), 2);
+        },
+        else => {
+            std.log.warn("[Bus] Unhandled write16 @ pAddr {X}h, data: {X}h.", .{pAddr_, data});
 
             unreachable;
         }
@@ -380,10 +422,37 @@ pub fn write32(pAddr: u64, data: u32) void {
             }
         },
         @enumToInt(MemoryRegion.PIF) => {
-            std.log.warn("[Bus] Unhandled write32 @ pAddr {X}h (PIF), data: {X}h.", .{pAddr_, data});
+            if (pAddr_ >= 0x1FC0_07C0 and pAddr_ < 0x1FC0_0800) {
+                std.log.info("[Bus] Write32 @ pAddr {X}h (PIF RAM), data: {X}h.", .{pAddr_, data});
+
+                const data_ = @byteSwap(u32, data);
+
+                @memcpy(@ptrCast([*]u8, &pifRAM[pAddr_ - 0x1FC0_07C0]), @ptrCast([*]const u8, &data_), 4);
+            } else {
+                std.log.warn("[Bus] Unhandled write32 @ pAddr {X}h (PIF), data: {X}h.", .{pAddr_, data});
+
+                unreachable;
+            }
         },
         else => {
             std.log.warn("[Bus] Unhandled write32 @ pAddr {X}h, data: {X}h.", .{pAddr_, data});
+
+            unreachable;
+        }
+    }
+}
+
+pub fn write64(pAddr: u64, data: u64) void {
+    const pAddr_ = pAddr & 0x1FFF_FFF8;
+
+    switch (pAddr_ >> 20) {
+        @enumToInt(MemoryRegion.RDRAM0) ... @enumToInt(MemoryRegion.RDRAM7) => {
+            const data_ = @byteSwap(u64, data);
+
+            @memcpy(@ptrCast([*]u8, &ram[pAddr_ & 0x7F_FFFF]), @ptrCast([*]const u8, &data_), 8);
+        },
+        else => {
+            std.log.warn("[Bus] Unhandled write64 @ pAddr {X}h, data: {X}h.", .{pAddr_, data});
 
             unreachable;
         }

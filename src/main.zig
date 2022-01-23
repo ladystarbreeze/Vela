@@ -9,7 +9,7 @@ const std = @import("std");
 
 const n64 = @import("/core/n64.zig");
 
-const romPath = "./velaFiles/CPUADD.N64";
+const romPath = "./velaFiles/NamcoMuseum64.z64";
 
 pub fn main() anyerror!void {
     try n64.run(romPath);
