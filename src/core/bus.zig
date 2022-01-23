@@ -31,6 +31,7 @@
 
 const std = @import("std");
 
+const mi = @import("mi.zig");
 const vi = @import("vi.zig");
 
 const MemoryRegion = enum(u64) {
@@ -203,13 +204,7 @@ pub fn read32(pAddr: u64) u32 {
             }
         },
         @enumToInt(MemoryRegion.MI) => {
-            switch (pAddr_ & 0xF_FFFF) {
-                else => {
-                    std.log.warn("[Bus] Unhandled read32 @ pAddr {X}h (MIPS Interface).", .{pAddr_});
-
-                    data = 0;
-                }
-            }
+            return mi.read32(pAddr_);
         },
         @enumToInt(MemoryRegion.VI) => {
             return vi.read32(pAddr_);
@@ -288,6 +283,12 @@ pub fn read64(pAddr: u64) u64 {
         @enumToInt(MemoryRegion.RDRAM0) ... @enumToInt(MemoryRegion.RDRAM7) => {
             @memcpy(@ptrCast([*]u8, &data), @ptrCast([*]u8, &ram[pAddr_ & 0x7F_FFFF]), 8);
             data = @byteSwap(u64, data);
+        },
+        @enumToInt(MemoryRegion.MI) => {
+            if (pAddr_ == 0x4300028) return data;
+            std.log.warn("[MI] Unhandled read64 @ pAddr {X}h.", .{pAddr_});
+
+            @panic("mi: unhandled read64");
         },
         else => {
             std.log.warn("[Bus] Unhandled read64 @ pAddr {X}h.", .{pAddr_});
@@ -373,11 +374,7 @@ pub fn write32(pAddr: u64, data: u32) void {
             }
         },
         @enumToInt(MemoryRegion.MI) => {
-            switch (pAddr_ & 0xF_FFFF) {
-                else => {
-                    std.log.warn("[Bus] Unhandled write32 @ pAddr {X}h (MIPS Interface), data: {X}h.", .{pAddr_, data});
-                }
-            }
+            mi.write32(pAddr_, data);
         },
         @enumToInt(MemoryRegion.VI) => {
             vi.write32(pAddr_, data);

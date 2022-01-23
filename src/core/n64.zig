@@ -23,7 +23,8 @@ const Screen = struct {
 
 const isFastBoot = true;
 
-const cpuCyclesFrame: i64 = 93_750_000 / 60;
+const cpuCyclesFrame   : i64 = 93_750_000 / 60;
+const cpuCyclesScanline: i64 = cpuCyclesFrame / 512;
 
 var screen: Screen = Screen{};
 
@@ -68,11 +69,15 @@ pub fn run(romPath: []const u8) anyerror!void {
     changeScreen(320, 3);
 
     var cyclesRem: i64 = cpuCyclesFrame;
+    var lineRem  : i64 = cpuCyclesScanline;
 
     mainLoop: while (true) {
         var e: SDL.SDL_Event = undefined;
 
-        cyclesRem -= cpu.step();
+        const c = cpu.step();
+
+        cyclesRem -= c;
+        lineRem   -= c;
 
         if (cyclesRem <= 0) {
             cyclesRem += cpuCyclesFrame;
@@ -93,6 +98,12 @@ pub fn run(romPath: []const u8) anyerror!void {
 
             SDL.SDL_RenderPresent(screen.renderer);
         }
+
+        if (lineRem <= 0) {
+            lineRem += cpuCyclesScanline;
+
+            vi.incCurrentV();
+        }
     }
 
     var x = SDL.SDL_DestroyTexture(screen.texture);
@@ -104,7 +115,7 @@ pub fn changeScreen(width: c_int, pFmt: u2) void {
     } else if (width == 640) {
         screen.height = 480;
     } else {
-        unreachable;
+        screen.height = 240;
     }
     
     screen.width = width;

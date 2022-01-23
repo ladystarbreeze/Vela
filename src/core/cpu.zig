@@ -69,13 +69,17 @@ const Opcode = enum(u32) {
     DADDIU = 0x19,
     LB     = 0x20,
     LH     = 0x21,
+    LWL    = 0x22,
     LW     = 0x23,
     LBU    = 0x24,
     LHU    = 0x25,
+    LWR    = 0x26,
     LWU    = 0x27,
     SB     = 0x28,
     SH     = 0x29,
+    SWL    = 0x2A,
     SW     = 0x2B,
+    SWR    = 0x2E,
     CACHE  = 0x2F,
     LWC1   = 0x31,
     LDC1   = 0x35,
@@ -104,6 +108,7 @@ const Special = enum(u32) {
     ADD    = 0x20,
     ADDU   = 0x21,
     SUBU   = 0x23,
+    SUB    = 0x22,
     AND    = 0x24,
     OR     = 0x25,
     XOR    = 0x26,
@@ -119,6 +124,7 @@ const Special = enum(u32) {
 
 /// REGIMM
 const Regimm = enum(u32) {
+    BLTZ   = 0x00,
     BGEZ   = 0x01,
     BGEZL  = 0x03,
     BGEZAL = 0x11,
@@ -189,6 +195,8 @@ const RegFile = struct {
         self.gprs[idx] = data_;
 
         self.gprs[@enumToInt(CPUReg.R0)] = 0;
+
+        //if (idx == 26) isDisasm = true;
     }
 
     /// Sets PC (32-bit), sign extends it
@@ -202,6 +210,8 @@ const RegFile = struct {
         self.gprs[idx] = data;
 
         self.gprs[@enumToInt(CPUReg.R0)] = 0;
+
+        //if (idx == 26) isDisasm = true;
     }
 
     /// Sets PC (64-bit)
@@ -215,6 +225,7 @@ const RegFile = struct {
 var regs = RegFile{};
 
 /// Are we in a branch delay slot?
+var isBD_ = false;
 var isBranchDelay = false;
 
 pub var isRunning = true;
@@ -285,14 +296,13 @@ fn read16(addr: u64) u16 {
 fn read32(addr: u64) u32 {
     // TODO: address translation
 
-    if (addr == 0xFFFFFFFF_BFC007FC) if (isDisasm) info("[CPU] PC: {X}h", .{regs.pc - 4});
-
     return bus.read32(addr);
 }
 
 /// Reads a 64-bit word from memory
 fn read64(addr: u64) u64 {
     // TODO: address translation
+
 
     return bus.read64(addr);
 }
@@ -335,14 +345,15 @@ fn fetchInstr() u32 {
     regs.pc  = regs.npc;
     regs.npc +%= 4;
 
-    isBranchDelay = false;
+    isBranchDelay = isBD_;
+    isBD_ = false;
 
     return data;
 }
 
 const ExceptionCode = cop0.ExceptionCode;
 
-fn raiseException(excCode: ExceptionCode) void {
+pub fn raiseException(excCode: ExceptionCode) void {
     const vectorBase: u32 = 0x8000_0180;
 
     info("[CPU] {s} exception @ {X}h!", .{@tagName(excCode), regs.cpc});
@@ -350,16 +361,16 @@ fn raiseException(excCode: ExceptionCode) void {
     cop0.cause.excCode = @enumToInt(excCode);
 
     if (!cop0.status.exl) {
-        cop0.cause.bd = isBranchDelay;
+        cop0.cause.bd = isBD_;
 
-        if (isBranchDelay) {
+        if (isBD_) {
             cop0.epc = @truncate(u32, regs.cpc -% 4);
         } else {
             cop0.epc = @truncate(u32, regs.cpc);
         }
-    }
 
-    cop0.status.exl = true;
+        cop0.status.exl = true;
+    }
 
     regs.setPC32(vectorBase);
 }
@@ -402,6 +413,7 @@ fn decodeInstr(instr: u32) void {
                 @enumToInt(Special.DIVU  ) => iDIVU  (instr),
                 @enumToInt(Special.ADD   ) => iADD   (instr),
                 @enumToInt(Special.ADDU  ) => iADDU  (instr),
+                @enumToInt(Special.SUB   ) => iSUB   (instr),
                 @enumToInt(Special.SUBU  ) => iSUBU  (instr),
                 @enumToInt(Special.AND   ) => iAND   (instr),
                 @enumToInt(Special.OR    ) => iOR    (instr),
@@ -425,6 +437,7 @@ fn decodeInstr(instr: u32) void {
             const regimm = getRt(instr);
 
             switch (regimm) {
+                @enumToInt(Regimm.BLTZ  ) => iBLTZ  (instr),
                 @enumToInt(Regimm.BGEZ  ) => iBGEZ  (instr),
                 @enumToInt(Regimm.BGEZL ) => iBGEZL (instr),
                 @enumToInt(Regimm.BGEZAL) => iBGEZAL(instr),
@@ -563,13 +576,17 @@ fn decodeInstr(instr: u32) void {
         @enumToInt(Opcode.DADDIU) => iDADDIU(instr),
         @enumToInt(Opcode.LB    ) => iLB    (instr),
         @enumToInt(Opcode.LH    ) => iLH    (instr),
+        @enumToInt(Opcode.LWL   ) => iLWL   (instr),
         @enumToInt(Opcode.LW    ) => iLW    (instr),
         @enumToInt(Opcode.LBU   ) => iLBU   (instr),
         @enumToInt(Opcode.LHU   ) => iLHU   (instr),
+        @enumToInt(Opcode.LWR   ) => iLWR   (instr),
         @enumToInt(Opcode.LWU   ) => iLWU   (instr),
         @enumToInt(Opcode.SB    ) => iSB    (instr),
         @enumToInt(Opcode.SH    ) => iSH    (instr),
+        @enumToInt(Opcode.SWL   ) => iSWL   (instr),
         @enumToInt(Opcode.SW    ) => iSW    (instr),
+        @enumToInt(Opcode.SWR   ) => iSWR   (instr),
         @enumToInt(Opcode.CACHE ) => {
             //warn("[CPU] Unhandled CACHE instruction.", .{});
         },
@@ -833,6 +850,19 @@ fn iBLEZL(instr: u32) void {
     doBranch(target, @bitCast(i64, regs.get(rs)) <= 0, false, true);
 
     if (isDisasm) info("[CPU] BLEZL ${}, {X}h; ${} = {X}h", .{rs, target, rs, regs.get(rs)});
+}
+
+/// BLTZ - Branch on Less Than Zero
+fn iBLTZ(instr: u32) void {
+    const offset = exts16(getImm16(instr)) << 2;
+
+    const rs = getRs(instr);
+
+    const target = regs.pc +% offset;
+
+    doBranch(target, @bitCast(i64, regs.get(rs)) < 0, false, false);
+
+    if (isDisasm) info("[CPU] BLTZ ${}, {X}h; ${} = {X}h", .{rs, target, rs, regs.get(rs)});
 }
 
 /// BNE - Branch on Not Equal
@@ -1139,6 +1169,8 @@ fn iLD(instr: u32) void {
 
     const addr = regs.get(base) +% imm;
 
+    if ((addr & 7) != 0) @panic("unaligned load");
+
     regs.set64(rt, read64(addr));
 
     if (isDisasm) info("[CPU] LD ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, regs.get(rt)});
@@ -1155,6 +1187,8 @@ fn iLDC1(instr: u32) void {
 
     const addr = regs.get(base) +% imm;
 
+    if ((addr & 7) != 0) @panic("unaligned load");
+
     cop1.setFGR64(rt, read64(addr));
 
     if (isDisasm) info("[CPU] LDC1 ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, cop1.getFGR64(rt)});
@@ -1169,6 +1203,8 @@ fn iLH(instr: u32) void {
 
     const addr = regs.get(base) +% imm;
 
+    if ((addr & 1) != 0) @panic("unaligned load");
+
     regs.set64(rt, exts16(read16(addr)));
 
     if (isDisasm) info("[CPU] LH ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, regs.get(rt)});
@@ -1182,6 +1218,8 @@ fn iLHU(instr: u32) void {
     const rt   = getRt(instr);
 
     const addr = regs.get(base) +% imm;
+
+    if ((addr & 1) != 0) @panic("unaligned load");
 
     regs.set64(rt, @intCast(u64, read16(addr)));
 
@@ -1208,6 +1246,8 @@ fn iLW(instr: u32) void {
 
     const addr = regs.get(base) +% imm;
 
+    if ((addr & 3) != 0) @panic("unaligned load");
+
     regs.set32(rt, read32(addr), true);
 
     if (isDisasm) info("[CPU] LW ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, regs.get(rt)});
@@ -1224,9 +1264,47 @@ fn iLWC1(instr: u32) void {
 
     const addr = regs.get(base) +% imm;
 
+    if ((addr & 3) != 0) @panic("unaligned load");
+
     cop1.setFGR32(rt, read32(addr));
 
     if (isDisasm) info("[CPU] LWC1 ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, cop1.getFGR32(rt)});
+}
+
+/// LWL - Load Word Left
+fn iLWL(instr: u32) void {
+    const imm = exts16(getImm16(instr));
+
+    const base = getRs(instr);
+    const rt   = getRt(instr);
+
+    const addr = regs.get(base) +% imm;
+
+    const shift = @truncate(u5, 8 * (addr & 3));
+    const mask  = @intCast(u32, 0xFFFFFFFF) << shift;
+
+    regs.set32(rt, (@truncate(u32, regs.get(rt)) & ~mask) | (read32(addr & 0xFFFFFFFC) << shift), true);
+
+    if (isDisasm) info("[CPU] LWL ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, regs.get(rt)});
+}
+
+/// LWR - Load Word Right
+fn iLWR(instr: u32) void {
+    const imm = exts16(getImm16(instr));
+
+    const base = getRs(instr);
+    const rt   = getRt(instr);
+
+    const addr = regs.get(base) +% imm;
+
+    if ((addr & 3) != 0) @panic("unaligned load");
+
+    const shift = @truncate(u5, 8 * ((addr ^ 3) & 3));
+    const mask  = @intCast(u32, 0xFFFFFFFF) >> shift;
+
+    regs.set32(rt, (@truncate(u32, regs.get(rt)) & ~mask) | (read32(addr & 0xFFFFFFFC) >> shift), true);
+
+    if (isDisasm) info("[CPU] LWR ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, regs.get(rt)});
 }
 
 /// LWU - Load Word Unsigned
@@ -1237,6 +1315,8 @@ fn iLWU(instr: u32) void {
     const rt   = getRt(instr);
 
     const addr = regs.get(base) + imm;
+
+    if ((addr & 3) != 0) @panic("unaligned load");
 
     regs.set64(rt, @intCast(u64, read32(addr)));
 
@@ -1540,6 +1620,25 @@ fn iSRLV(instr: u32) void {
     if (isDisasm) info("[CPU] SRLV ${}, ${}, ${}; ${} = {X}h", .{rd, rt, rs, rd, regs.get(rd)});
 }
 
+/// SUB - SUB
+fn iSUB(instr: u32) void {
+    const rd = getRd(instr);
+    const rs = getRs(instr);
+    const rt = getRt(instr);
+
+    var result: i32 = undefined;
+
+    if (@subWithOverflow(i32, @bitCast(i32, @truncate(u32, regs.get(rs))), @bitCast(i32, @truncate(u32, regs.get(rt))), &result)) {
+        warn("[CPU] SUB overflow.", .{});
+
+        unreachable;
+    }
+
+    regs.set32(rd, @bitCast(u32, result), true);
+
+    if (isDisasm) info("[CPU] SUB ${}, ${}, ${}; ${} = {X}h", .{rd, rs, rt, rd, regs.get(rd)});
+}
+
 /// SUBU - SUB Unsigned
 fn iSUBU(instr: u32) void {
     const rd = getRd(instr);
@@ -1563,6 +1662,44 @@ fn iSW(instr: u32) void {
     store32(addr, @truncate(u32, regs.get(rt)));
 
     if (isDisasm) info("[CPU] SW ${}, ${}({}); ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), addr, @truncate(u32, regs.get(rt))});
+}
+
+/// SWL - Store Word Left
+fn iSWL(instr: u32) void {
+    const imm = exts16(getImm16(instr));
+
+    const base = getRs(instr);
+    const rt   = getRt(instr);
+
+    const addr = regs.get(base) +% imm;
+
+    const shift = @truncate(u5, 8 * (addr & 3));
+    const mask  = @intCast(u32, 0xFFFFFFFF) >> shift;
+
+    const data = read32(addr & 0xFFFFFFFC);
+
+    store32(addr & 0xFFFFFFFC, (data & ~mask) | (@truncate(u32, regs.get(rt)) >> shift));
+
+    if (isDisasm) info("[CPU] SWL ${}, ${}({}); ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), addr, @truncate(u32, regs.get(rt))});
+}
+
+/// SWR - Store Word Right
+fn iSWR(instr: u32) void {
+    const imm = exts16(getImm16(instr));
+
+    const base = getRs(instr);
+    const rt   = getRt(instr);
+
+    const addr = regs.get(base) +% imm;
+
+    const shift = @truncate(u5, 8 * ((addr ^ 3) & 3));
+    const mask  = @intCast(u32, 0xFFFFFFFF) << shift;
+
+    const data = read32(addr & 0xFFFFFFFC);
+
+    store32(addr & 0xFFFFFFFC, (data & ~mask) | (@truncate(u32, regs.get(rt)) << shift));
+
+    if (isDisasm) info("[CPU] SWR ${}, ${}({}); ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), addr, @truncate(u32, regs.get(rt))});
 }
 
 /// XOR - XOR
@@ -1594,5 +1731,11 @@ pub fn step() i64 {
 
     decodeInstr(instr);
 
-    return 4;
+    if (isDisasm) info("{X}h:{X}h", .{regs.cpc, instr});
+
+    //if (regs.cpc == 0xFFFFFFFF80089DD0) isDisasm = true;
+
+    cop0.tickCount(1);
+
+    return 2;
 }
