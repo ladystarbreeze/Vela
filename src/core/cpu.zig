@@ -65,8 +65,11 @@ const Opcode = enum(u32) {
     BEQL   = 0x14,
     BNEL   = 0x15,
     BLEZL  = 0x16,
+    BGTZL  = 0x17,
     DADDI  = 0x18,
     DADDIU = 0x19,
+    LDL    = 0x1A,
+    LDR    = 0x1B,
     LB     = 0x20,
     LH     = 0x21,
     LWL    = 0x22,
@@ -84,6 +87,7 @@ const Opcode = enum(u32) {
     LWC1   = 0x31,
     LDC1   = 0x35,
     LD     = 0x37,
+    SWC1   = 0x39,
     SDC1   = 0x3D,
     SD     = 0x3F,
 };
@@ -95,6 +99,7 @@ const Special = enum(u32) {
     SRA    = 0x03,
     SLLV   = 0x04,
     SRLV   = 0x06,
+    SRAV   = 0x07,
     JR     = 0x08,
     JALR   = 0x09,
     MFHI   = 0x10,
@@ -126,6 +131,7 @@ const Special = enum(u32) {
 const Regimm = enum(u32) {
     BLTZ   = 0x00,
     BGEZ   = 0x01,
+    BLTZL  = 0x02,
     BGEZL  = 0x03,
     BGEZAL = 0x11,
 };
@@ -162,7 +168,9 @@ const CO = enum(u32) {
 const CO1 = enum(u32) {
     ADD     = 0x00,
     SUB     = 0x01,
+    MUL     = 0x02,
     DIV     = 0x03,
+    MOV     = 0x06,
     TRUNC_W = 0x0D,
     CVT_S   = 0x20,
     CVT_D   = 0x21,
@@ -345,7 +353,7 @@ fn fetchInstr() u32 {
     const data = read32(regs.pc);
 
     if (isDisasm) info("{X}h", .{regs.pc});
-    
+
     regs.pc  = regs.npc;
     regs.npc +%= 4;
 
@@ -410,6 +418,7 @@ fn decodeInstr(instr: u32) void {
                 @enumToInt(Special.SRA   ) => iSRA   (instr),
                 @enumToInt(Special.SLLV  ) => iSLLV  (instr),
                 @enumToInt(Special.SRLV  ) => iSRLV  (instr),
+                @enumToInt(Special.SRAV  ) => iSRAV  (instr),
                 @enumToInt(Special.JR    ) => iJR    (instr),
                 @enumToInt(Special.JALR  ) => iJALR  (instr),
                 @enumToInt(Special.MFHI  ) => iMFHI  (instr),
@@ -448,6 +457,7 @@ fn decodeInstr(instr: u32) void {
             switch (regimm) {
                 @enumToInt(Regimm.BLTZ  ) => iBLTZ  (instr),
                 @enumToInt(Regimm.BGEZ  ) => iBGEZ  (instr),
+                @enumToInt(Regimm.BLTZL ) => iBLTZL (instr),
                 @enumToInt(Regimm.BGEZL ) => iBGEZL (instr),
                 @enumToInt(Regimm.BGEZAL) => iBGEZAL(instr),
                 else => {
@@ -528,7 +538,9 @@ fn decodeInstr(instr: u32) void {
                     switch (funct) {
                         @enumToInt(CO1.ADD    ) => cop1.fADD    (instr, Fmt.S),
                         @enumToInt(CO1.SUB    ) => cop1.fSUB    (instr, Fmt.S),
+                        @enumToInt(CO1.MUL    ) => cop1.fMUL    (instr, Fmt.S),
                         @enumToInt(CO1.DIV    ) => cop1.fDIV    (instr, Fmt.S),
+                        @enumToInt(CO1.MOV    ) => cop1.fMOV    (instr, Fmt.S),
                         @enumToInt(CO1.TRUNC_W) => cop1.fTRUNC_W(instr, Fmt.S),
                         // @enumToInt(CO1.CVT_S  ) => cop1.fCVT_S   (instr, Fmt.S),
                         // @enumToInt(CO1.CVT_D  ) => cop1.fCVT_D   (instr, Fmt.S),
@@ -582,8 +594,11 @@ fn decodeInstr(instr: u32) void {
         @enumToInt(Opcode.BEQL  ) => iBEQL  (instr),
         @enumToInt(Opcode.BNEL  ) => iBNEL  (instr),
         @enumToInt(Opcode.BLEZL ) => iBLEZL (instr),
+        @enumToInt(Opcode.BGTZL ) => iBGTZL (instr),
         @enumToInt(Opcode.DADDI ) => iDADDI (instr),
         @enumToInt(Opcode.DADDIU) => iDADDIU(instr),
+        @enumToInt(Opcode.LDL   ) => iLDL   (instr),
+        @enumToInt(Opcode.LDR   ) => iLDR   (instr),
         @enumToInt(Opcode.LB    ) => iLB    (instr),
         @enumToInt(Opcode.LH    ) => iLH    (instr),
         @enumToInt(Opcode.LWL   ) => iLWL   (instr),
@@ -603,6 +618,7 @@ fn decodeInstr(instr: u32) void {
         @enumToInt(Opcode.LWC1  ) => iLWC1  (instr),
         @enumToInt(Opcode.LDC1  ) => iLDC1  (instr),
         @enumToInt(Opcode.LD    ) => iLD    (instr),
+        @enumToInt(Opcode.SWC1  ) => iSWC1  (instr),
         @enumToInt(Opcode.SDC1  ) => iSDC1  (instr),
         @enumToInt(Opcode.SD    ) => iSD    (instr),
         else => {
@@ -836,6 +852,19 @@ fn iBGTZ(instr: u32) void {
     if (isDisasm) info("[CPU] BGTZ ${}, {X}h; ${} = {X}h", .{rs, target, rs, regs.get(rs)});
 }
 
+/// BGTZL - Branch on Greater Than Zero Likely
+fn iBGTZL(instr: u32) void {
+    const offset = exts16(getImm16(instr)) << 2;
+
+    const rs = getRs(instr);
+
+    const target = regs.pc +% offset;
+
+    doBranch(target, @bitCast(i64, regs.get(rs)) > 0, false, true);
+
+    if (isDisasm) info("[CPU] BGTZL ${}, {X}h; ${} = {X}h", .{rs, target, rs, regs.get(rs)});
+}
+
 /// BLEZ - Branch on Less than or Equal Zero
 fn iBLEZ(instr: u32) void {
     const offset = exts16(getImm16(instr)) << 2;
@@ -873,6 +902,19 @@ fn iBLTZ(instr: u32) void {
     doBranch(target, @bitCast(i64, regs.get(rs)) < 0, false, false);
 
     if (isDisasm) info("[CPU] BLTZ ${}, {X}h; ${} = {X}h", .{rs, target, rs, regs.get(rs)});
+}
+
+/// BLTZL - Branch on Less Than Zero Likely
+fn iBLTZL(instr: u32) void {
+    const offset = exts16(getImm16(instr)) << 2;
+
+    const rs = getRs(instr);
+
+    const target = regs.pc +% offset;
+
+    doBranch(target, @bitCast(i64, regs.get(rs)) < 0, false, true);
+
+    if (isDisasm) info("[CPU] BLTZL ${}, {X}h; ${} = {X}h", .{rs, target, rs, regs.get(rs)});
 }
 
 /// BNE - Branch on Not Equal
@@ -1022,7 +1064,11 @@ fn iDIV(instr: u32) void {
         regs.hi = 0;
     } else {
         regs.lo = exts32(@bitCast(u32, @divFloor(n, d)));
-        regs.hi = exts32(@bitCast(u32, @rem(n, d)));
+        if (d < 0) {
+            regs.hi = exts32(@bitCast(u32, @rem(n, -d)));
+        } else {
+            regs.hi = exts32(@bitCast(u32, n) % @bitCast(u32, d));
+        }
     }
 
     if (isDisasm) info("[CPU] DIV ${}, ${}; HI = {X}h, LO = {X}h", .{rs, rt, regs.hi, regs.lo});
@@ -1204,6 +1250,40 @@ fn iLDC1(instr: u32) void {
     cop1.setFGR64(rt, read64(addr));
 
     if (isDisasm) info("[CPU] LDC1 ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, cop1.getFGR64(rt)});
+}
+
+/// LDL - Load Doubleword Left
+fn iLDL(instr: u32) void {
+    const imm = exts16(getImm16(instr));
+
+    const base = getRs(instr);
+    const rt   = getRt(instr);
+
+    const addr = regs.get(base) +% imm;
+
+    const shift = @truncate(u6, 8 * (addr & 7));
+    const mask  = @intCast(u64, 0xFFFFFFFF_FFFFFFFF) << shift;
+
+    regs.set64(rt, (regs.get(rt) & ~mask) | (read64(addr & 0xFFFFFFF8) << shift));
+
+    if (isDisasm) info("[CPU] LDL ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, regs.get(rt)});
+}
+
+/// LDR - Load Doubleword Right
+fn iLDR(instr: u32) void {
+    const imm = exts16(getImm16(instr));
+
+    const base = getRs(instr);
+    const rt   = getRt(instr);
+
+    const addr = regs.get(base) +% imm;
+
+    const shift = @truncate(u6, 8 * ((addr ^ 7) & 7));
+    const mask  = @intCast(u64, 0xFFFFFFFF_FFFFFFFF) >> shift;
+
+    regs.set64(rt, (regs.get(rt) & ~mask) | (read64(addr & 0xFFFFFFF8) >> shift));
+
+    if (isDisasm) info("[CPU] LDR ${}, ${}({}); ${} = ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), rt, addr, regs.get(rt)});
 }
 
 /// LH - Load Halfword
@@ -1437,7 +1517,7 @@ fn iNOR(instr: u32) void {
     const rs = getRs(instr);
     const rt = getRt(instr);
 
-    regs.set64(rd, ~regs.get(rs) | regs.get(rt));
+    regs.set64(rd, ~(regs.get(rs) | regs.get(rt)));
 
     if (isDisasm) info("[CPU] NOR ${}, ${}, ${}; ${} = {X}h", .{rd, rs, rt, rd, regs.get(rd)});
 }
@@ -1607,6 +1687,17 @@ fn iSRA(instr: u32) void {
     if (isDisasm) info("[CPU] SRA ${}, ${}, {}; ${} = {X}h", .{rd, rt, sa, rd, regs.get(rd)});
 }
 
+/// SRAV - Shift Right Arithmetic Variable
+fn iSRAV(instr: u32) void {
+    const rd = getRd(instr);
+    const rs = getRs(instr);
+    const rt = getRt(instr);
+
+    regs.set32(rd, @truncate(u32, @bitCast(u64, @bitCast(i64, regs.get(rt)) >> @truncate(u6, regs.get(rs)))), true);
+
+    if (isDisasm) info("[CPU] SRAV ${}, ${}, ${}; ${} = {X}h", .{rd, rt, rs, rd, regs.get(rd)});
+}
+
 /// SRL - Shift Right Logical
 fn iSRL(instr: u32) void {
     const sa = getSa(instr);
@@ -1672,6 +1763,21 @@ fn iSW(instr: u32) void {
     store32(addr, @truncate(u32, regs.get(rt)));
 
     if (isDisasm) info("[CPU] SW ${}, ${}({}); ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), addr, @truncate(u32, regs.get(rt))});
+}
+/// SWC1 - Store Word Coprocessor 1
+fn iSWC1(instr: u32) void {
+    if (!checkCOPUsable(1)) return;
+
+    const imm = exts16(getImm16(instr));
+
+    const base = getRs(instr);
+    const rt   = getRt(instr);
+
+    const addr = regs.get(base) +% imm;
+
+    store32(addr, cop1.getFGR32(rt));
+
+    if (isDisasm) info("[CPU] SWC1 ${}, ${}({}); ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), addr, cop1.getFGR64(rt)});
 }
 
 /// SWL - Store Word Left

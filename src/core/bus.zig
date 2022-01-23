@@ -57,6 +57,7 @@ const MemoryRegion = enum(u64) {
 const PIReg = enum(u64) {
     DRAMAddr = 0x00,
     CartAddr = 0x04,
+    ReadLen  = 0x08,
     WriteLen = 0x0C,
     PIStatus = 0x10,
 };
@@ -70,12 +71,25 @@ const PIStatus = packed struct {
     _pad1   :  u16 = 0,
 };
 
+const SIStatus = packed struct {
+    dmaBusy    : bool = false,
+    ioBusy     : bool = false,
+    readPending: bool = false,
+    dmaError   : bool = false,
+    pchState   : u3   = 0,
+    dmaState   : u3   = 0,
+    dmaIRQ     : bool = false,
+    _pad0      : u21  = 0,
+};
+
 const PIRegs = struct {
     dramAddr: u32 = undefined, cartAddr: u32 = undefined, writeLen: u32 = undefined,
     piStatus: PIStatus = PIStatus{},
 };
 
 var piRegs = PIRegs{};
+
+var siStatus = SIStatus{};
 
 pub var ram: []u8 = undefined; // RDRAM
 var rom: []u8 = undefined; // Cartridge ROM
@@ -214,7 +228,7 @@ pub fn read32(pAddr: u64) u32 {
                 else => {
                     std.log.warn("[Bus] Unhandled read32 @ pAddr {X}h (Audio Interface).", .{pAddr_});
 
-                    data = 0;
+                    data = 0xFFFFFFFF;
                 }
             }
         },
@@ -241,6 +255,9 @@ pub fn read32(pAddr: u64) u32 {
         },
         @enumToInt(MemoryRegion.SI) => {
             switch (pAddr_ & 0xF_FFFF) {
+                0x0_0018 => {
+                    data = @bitCast(u32, siStatus);
+                },
                 else => {
                     std.log.warn("[Bus] Unhandled read32 @ pAddr {X}h (Serial Interface).", .{pAddr_});
 
@@ -342,6 +359,8 @@ pub fn write16(pAddr: u64, data: u16) void {
     }
 }
 
+var siDRAMAddr: u32 = 0;
+
 pub fn write32(pAddr: u64, data: u32) void {
     const pAddr_ = pAddr & 0x1FFF_FFFC;
 
@@ -398,6 +417,15 @@ pub fn write32(pAddr: u64, data: u32) void {
 
                     piRegs.cartAddr = data;
                 },
+                @enumToInt(PIReg.ReadLen) => {
+                    std.log.info("[Bus] Write32 @ pAddr {X}h (PI Read Length), data: {X}h.", .{pAddr_, data});
+
+                    piRegs.piStatus.dmaIRQ = true;
+
+                    mi.setPending(mi.InterruptSource.PI);
+
+                    @panic("blah");
+                },
                 @enumToInt(PIReg.WriteLen) => {
                     std.log.info("[Bus] Write32 @ pAddr {X}h (PI Write Length), data: {X}h.", .{pAddr_, data});
 
@@ -407,6 +435,17 @@ pub fn write32(pAddr: u64, data: u32) void {
                     @memcpy(@ptrCast([*]u8, &ram[piRegs.dramAddr]), @ptrCast([*]u8, &rom[piRegs.cartAddr & 0xFFF_FFFF]), piRegs.writeLen +% 1);
 
                     piRegs.piStatus.dmaIRQ = true;
+
+                    mi.setPending(mi.InterruptSource.PI);
+                },
+                @enumToInt(PIReg.PIStatus) => {
+                    std.log.info("[Bus] Write32 @ pAddr {X}h (PI Status), data: {X}h.", .{pAddr_, data});
+
+                    if ((data & 2) != 0) {
+                        piRegs.piStatus.dmaIRQ = false;
+
+                        mi.clearPending(mi.InterruptSource.PI);
+                    }
                 },
                 else => {
                     std.log.warn("[Bus] Unhandled write32 @ pAddr {X}h (Peripheral Interface), data: {X}h.", .{pAddr_, data});
@@ -422,6 +461,27 @@ pub fn write32(pAddr: u64, data: u32) void {
         },
         @enumToInt(MemoryRegion.SI) => {
             switch (pAddr_ & 0xF_FFFF) {
+                0x0_0000 => {
+                    std.log.warn("[Bus] Unhandled write32 @ pAddr {X}h (SI DRAM Address), data: {X}h.", .{pAddr_, data});
+
+                    siDRAMAddr = data & 0xFF_FFFF;
+                },
+                0x0_0004 ... 0x0_0014 => {
+                    std.log.warn("[Bus] Unhandled write32 @ pAddr {X}h (SI RD/WR Address), data: {X}h.", .{pAddr_, data});
+                    
+                    @memset(@ptrCast([*]u8, &ram[siDRAMAddr]), 0, 64);
+
+                    siStatus.dmaIRQ = true;
+
+                    mi.setPending(mi.InterruptSource.SI);
+                },
+                0x0_0018 => {
+                    std.log.warn("[Bus] Unhandled write32 @ pAddr {X}h (SI Status), data: {X}h.", .{pAddr_, data});
+
+                    siStatus.dmaIRQ = false;
+
+                    mi.clearPending(mi.InterruptSource.SI);
+                },
                 else => {
                     std.log.warn("[Bus] Unhandled write32 @ pAddr {X}h (Serial Interface), data: {X}h.", .{pAddr_, data});
                 }

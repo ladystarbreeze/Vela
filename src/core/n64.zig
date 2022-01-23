@@ -58,6 +58,8 @@ pub fn run(romPath: []const u8) anyerror!void {
     // Get allocator
     var alloc = std.heap.page_allocator;
 
+    var fb = try alloc.alloc(u8, 640 * 480 * 2);
+
     // Initialize submodules
     try bus.init(alloc, romPath, isFastBoot);
     defer bus.deinit(alloc);
@@ -88,8 +90,24 @@ pub fn run(romPath: []const u8) anyerror!void {
                 }
             }
 
-            if (SDL.SDL_UpdateTexture(screen.texture, null, @ptrCast(*u8, &bus.ram[vi.getOrigin()]), screen.width * screen.stride) < 0) {
-                sdlPanic();
+            if (screen.stride == 2) {
+                var i: usize = 0;
+
+                while (i < (screen.width * screen.height)) {
+                    fb[i * 2 + 0] = bus.ram[vi.getOrigin() + i * 2 + 1];
+                    fb[i * 2 + 1] = bus.ram[vi.getOrigin() + i * 2 + 0];
+
+                    i += 1;
+                }
+
+
+                if (SDL.SDL_UpdateTexture(screen.texture, null, @ptrCast(*u8, fb), screen.width * screen.stride) < 0) {
+                    sdlPanic();
+                }
+            } else {
+                if (SDL.SDL_UpdateTexture(screen.texture, null, @ptrCast(*u8, &bus.ram[vi.getOrigin()]), screen.width * screen.stride) < 0) {
+                    sdlPanic();
+                }
             }
 
             if (SDL.SDL_RenderCopy(screen.renderer, screen.texture, null, null) < 0) {
@@ -105,6 +123,8 @@ pub fn run(romPath: []const u8) anyerror!void {
             vi.incCurrentV();
         }
     }
+
+    alloc.free(fb);
 
     var x = SDL.SDL_DestroyTexture(screen.texture);
 }
@@ -125,11 +145,11 @@ pub fn changeScreen(width: c_int, pFmt: u2) void {
 
         screen.texture = SDL.SDL_CreateTexture(
             screen.renderer,
-            SDL.SDL_PIXELFORMAT_XBGR1555, SDL.SDL_TEXTUREACCESS_STREAMING,
+            SDL.SDL_PIXELFORMAT_RGBA5551, SDL.SDL_TEXTUREACCESS_STREAMING,
             screen.width, screen.height
         ) orelse sdlPanic();
     }
-    else if (pFmt == 3) {
+    else if (pFmt == 0 or pFmt == 3) {
         screen.stride = 4;
 
         screen.texture = SDL.SDL_CreateTexture(

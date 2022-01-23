@@ -182,23 +182,6 @@ pub fn fADD(instr: u32, fmt: comptime Fmt) void {
     if (isDisasm) info("[FPU] ADD.{s} ${}, ${}, ${}; ${} = {X}h", .{@tagName(fmt), fd, fs, ft, fd, getFGR64(fd)});
 }
 
-/// SUB - SUB
-pub fn fSUB(instr: u32, fmt: comptime Fmt) void {
-    const fd = getFd(instr);
-    const fs = getFs(instr);
-    const ft = getFt(instr);
-
-    switch (fmt) {
-        Fmt.S => setFGR32(fd, @bitCast(u32, @intToFloat(f32, getFGR32(fs)) - @intToFloat(f32, getFGR32(ft)))),
-        Fmt.D => setFGR64(fd, @bitCast(u64, @intToFloat(f64, getFGR64(fs)) - @intToFloat(f64, getFGR64(ft)))),
-        else => {
-            @panic("add: unhandled fmt");
-        }
-    }
-
-    if (isDisasm) info("[FPU] SUB.{s} ${}, ${}, ${}; ${} = {X}h", .{@tagName(fmt), fd, fs, ft, fd, getFGR64(fd)});
-}
-
 /// C - Compare
 pub fn fC(instr: u32, cond: u4, fmt: comptime Fmt) void {
     const fs = getFs(instr);
@@ -286,6 +269,56 @@ pub fn fDIV(instr: u32, fmt: comptime Fmt) void {
     }
 
     if (isDisasm) info("[FPU] DIV.{s} ${}, ${}, ${}; ${} = {X}h", .{@tagName(fmt), fd, fs, ft, fd, getFGR64(fd)});
+}
+
+/// MOV - MOVe
+pub fn fMOV(instr: u32, fmt: comptime Fmt) void {
+    const fd = getFd(instr);
+    const fs = getFs(instr);
+
+    var data: f32 = undefined;
+
+    switch (fmt) {
+        Fmt.S => setFGR32(fd, @bitCast(u32, @intToFloat(f32, getFGR32(fs)))),
+        else => {
+            @panic("mov unhandled fmt");
+        }
+    }
+
+    if (isDisasm) info("[FPU] MOV.{s} ${}, ${}; ${} = {X}h", .{@tagName(fmt), fd, fs, fd, @bitCast(u32, data)});
+}
+
+/// MUL - MULtiply
+pub fn fMUL(instr: u32, fmt: comptime Fmt) void {
+    const fd = getFd(instr);
+    const fs = getFs(instr);
+    const ft = getFt(instr);
+
+    switch (fmt) {
+        Fmt.S => setFGR32(fd, @bitCast(u32, @intToFloat(f32, getFGR32(fs)) * @intToFloat(f32, getFGR32(ft)))),
+        else => {
+            @panic("mul: unhandled fmt");
+        }
+    }
+
+    if (isDisasm) info("[FPU] MUL.{s} ${}, ${}, ${}; ${} = {X}h", .{@tagName(fmt), fd, fs, ft, fd, getFGR64(fd)});
+}
+
+/// SUB - SUB
+pub fn fSUB(instr: u32, fmt: comptime Fmt) void {
+    const fd = getFd(instr);
+    const fs = getFs(instr);
+    const ft = getFt(instr);
+
+    switch (fmt) {
+        Fmt.S => setFGR32(fd, @bitCast(u32, @intToFloat(f32, getFGR32(fs)) - @intToFloat(f32, getFGR32(ft)))),
+        Fmt.D => setFGR64(fd, @bitCast(u64, @intToFloat(f64, getFGR64(fs)) - @intToFloat(f64, getFGR64(ft)))),
+        else => {
+            @panic("add: unhandled fmt");
+        }
+    }
+
+    if (isDisasm) info("[FPU] SUB.{s} ${}, ${}, ${}; ${} = {X}h", .{@tagName(fmt), fd, fs, ft, fd, getFGR64(fd)});
 }
 
 /// TRUNC.W - TRUNCate to Word
