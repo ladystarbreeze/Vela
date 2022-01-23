@@ -206,7 +206,6 @@ const RegFile = struct {
         if ((data & 3) != 0) @panic("unaligned pc");
 
         self.pc  = exts32(data);
-        self.cpc = self.pc;
         self.npc = self.pc +% 4;
     }
 
@@ -224,7 +223,6 @@ const RegFile = struct {
         if ((data & 3) != 0) @panic("unaligned pc");
 
         self.pc  = data;
-        self.cpc = self.pc;
         self.npc = self.pc +% 4;
     }
 };
@@ -347,8 +345,7 @@ fn fetchInstr() u32 {
     const data = read32(regs.pc);
 
     if (isDisasm) info("{X}h", .{regs.pc});
-
-    regs.cpc = regs.pc;
+    
     regs.pc  = regs.npc;
     regs.npc +%= 4;
 
@@ -1740,13 +1737,15 @@ fn iXORI(instr: u32) void {
 
 /// Steps the CPU module, returns elapsed cycles
 pub fn step() i64 {
-    const instr = fetchInstr();
+    regs.cpc = regs.pc;
 
     if(cop0.checkForInterrupts()) {
         cop0.tickCount(1);
 
         return 2;
     }
+
+    const instr = fetchInstr();
 
     decodeInstr(instr);
 
