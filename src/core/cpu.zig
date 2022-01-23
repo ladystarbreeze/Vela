@@ -161,6 +161,7 @@ const CO = enum(u32) {
 /// COP1 function
 const CO1 = enum(u32) {
     ADD     = 0x00,
+    SUB     = 0x01,
     DIV     = 0x03,
     TRUNC_W = 0x0D,
     CVT_S   = 0x20,
@@ -181,6 +182,7 @@ const RegFile = struct {
 
     /// Reads GPR (64-bit)
     pub fn get(self: RegFile, idx: u32) u64 {
+        //if (idx == 26) isDisasm = true;
         return self.gprs[idx];
     }
 
@@ -196,12 +198,15 @@ const RegFile = struct {
 
         self.gprs[@enumToInt(CPUReg.R0)] = 0;
 
-        //if (idx == 26) isDisasm = true;
+        // if (idx == 26) isDisasm = true;
     }
 
     /// Sets PC (32-bit), sign extends it
     pub fn setPC32(self: *RegFile, data: u32) void {
+        if ((data & 3) != 0) @panic("unaligned pc");
+
         self.pc  = exts32(data);
+        self.cpc = self.pc;
         self.npc = self.pc +% 4;
     }
 
@@ -211,12 +216,15 @@ const RegFile = struct {
 
         self.gprs[@enumToInt(CPUReg.R0)] = 0;
 
-        //if (idx == 26) isDisasm = true;
+        // if (idx == 26) isDisasm = true;
     }
 
     /// Sets PC (64-bit)
     pub fn setPC64(self: *RegFile, data: u64) void {
+        if ((data & 3) != 0) @panic("unaligned pc");
+
         self.pc  = data;
+        self.cpc = self.pc;
         self.npc = self.pc +% 4;
     }
 };
@@ -225,7 +233,6 @@ const RegFile = struct {
 var regs = RegFile{};
 
 /// Are we in a branch delay slot?
-var isBD_ = false;
 var isBranchDelay = false;
 
 pub var isRunning = true;
@@ -345,8 +352,7 @@ fn fetchInstr() u32 {
     regs.pc  = regs.npc;
     regs.npc +%= 4;
 
-    isBranchDelay = isBD_;
-    isBD_ = false;
+    isBranchDelay = false;
 
     return data;
 }
@@ -360,17 +366,23 @@ pub fn raiseException(excCode: ExceptionCode) void {
 
     cop0.cause.excCode = @enumToInt(excCode);
 
-    if (!cop0.status.exl) {
-        cop0.cause.bd = isBD_;
+    const epc = regs.cpc;
 
-        if (isBD_) {
-            cop0.epc = @truncate(u32, regs.cpc -% 4);
+    if (!cop0.status.exl) {
+        cop0.cause.bd = isBranchDelay;
+
+        if (isBranchDelay) {
+            cop0.epc = @truncate(u32, epc -% 4);
         } else {
-            cop0.epc = @truncate(u32, regs.cpc);
+            cop0.epc = @truncate(u32, epc);
         }
 
-        cop0.status.exl = true;
+        info("EPC: {X}h, BD: {}", .{cop0.epc, isBranchDelay});
     }
+
+    cop0.status.exl = true;
+
+    info("Status: {X}h, Cause: {X}h", .{@bitCast(u32, cop0.status), @bitCast(u32, cop0.cause)});
 
     regs.setPC32(vectorBase);
 }
@@ -518,6 +530,7 @@ fn decodeInstr(instr: u32) void {
 
                     switch (funct) {
                         @enumToInt(CO1.ADD    ) => cop1.fADD    (instr, Fmt.S),
+                        @enumToInt(CO1.SUB    ) => cop1.fSUB    (instr, Fmt.S),
                         @enumToInt(CO1.DIV    ) => cop1.fDIV    (instr, Fmt.S),
                         @enumToInt(CO1.TRUNC_W) => cop1.fTRUNC_W(instr, Fmt.S),
                         // @enumToInt(CO1.CVT_S  ) => cop1.fCVT_S   (instr, Fmt.S),
@@ -1089,6 +1102,8 @@ fn iERET() void {
 
     // TODO: set LL to false
 
+    info("ERET, PC: {X}h", .{regs.pc});
+
     if (isDisasm) info("[CPU] ERET", .{});
 }
 
@@ -1296,8 +1311,6 @@ fn iLWR(instr: u32) void {
     const rt   = getRt(instr);
 
     const addr = regs.get(base) +% imm;
-
-    if ((addr & 3) != 0) @panic("unaligned load");
 
     const shift = @truncate(u5, 8 * ((addr ^ 3) & 3));
     const mask  = @intCast(u32, 0xFFFFFFFF) >> shift;
@@ -1729,11 +1742,15 @@ fn iXORI(instr: u32) void {
 pub fn step() i64 {
     const instr = fetchInstr();
 
+    if(cop0.checkForInterrupts()) {
+        cop0.tickCount(1);
+
+        return 2;
+    }
+
     decodeInstr(instr);
 
     if (isDisasm) info("{X}h:{X}h", .{regs.cpc, instr});
-
-    //if (regs.cpc == 0xFFFFFFFF80089DD0) isDisasm = true;
 
     cop0.tickCount(1);
 

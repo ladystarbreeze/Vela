@@ -155,14 +155,10 @@ pub fn set32(idx: u32, data: u32) void {
         @enumToInt(COP0Reg.Status) => {
             status = @bitCast(Status, @bitCast(u32, status) & ~statusMask);
             status = @bitCast(Status, @bitCast(u32, status) | (data & statusMask));
-
-            checkForInterrupts();
         },
         @enumToInt(COP0Reg.Cause) => {
             cause = @bitCast(Cause, @bitCast(u32, cause) & ~causeMask);
             cause = @bitCast(Cause, @bitCast(u32, cause) | (data & causeMask));
-
-            checkForInterrupts();
         },
         @enumToInt(COP0Reg.EPC) => {
             epc = data;
@@ -176,22 +172,22 @@ pub fn set32(idx: u32, data: u32) void {
     std.log.info("[COP0] Write {s}, data: {X}h.", .{@tagName(@intToEnum(COP0Reg, idx)), data});
 }
 
-fn checkForInterrupts() void {
+pub fn checkForInterrupts() bool {
     if (((cause.ip & status.im) != 0) and status.ie and !status.exl and !status.erl) {
         raiseException(ExceptionCode.Interrupt);
+
+        return true;
     }
+
+    return false;
 }
 
 pub fn clearPending(comptime i: u8) void {
     cause.ip &= ~@intCast(u8, (1 << i));
-
-    checkForInterrupts();
 }
 
 pub fn setPending(comptime i: u8) void {
     cause.ip |= (1 << i);
-
-    checkForInterrupts();
 }
 
 pub fn tickCount(c: u32) void {
