@@ -32,7 +32,10 @@
 const std = @import("std");
 
 const mi = @import("mi.zig");
+const si = @import("si.zig");
 const vi = @import("vi.zig");
+
+const pif = @import("pif.zig");
 
 const MemoryRegion = enum(u64) {
     RDRAM0 = 0x000, RDRAM1 = 0x001, RDRAM2 = 0x002, RDRAM3 = 0x003,
@@ -71,17 +74,6 @@ const PIStatus = packed struct {
     _pad1   :  u16 = 0,
 };
 
-const SIStatus = packed struct {
-    dmaBusy    : bool = false,
-    ioBusy     : bool = false,
-    readPending: bool = false,
-    dmaError   : bool = false,
-    pchState   : u3   = 0,
-    dmaState   : u3   = 0,
-    dmaIRQ     : bool = false,
-    _pad0      : u21  = 0,
-};
-
 const PIRegs = struct {
     dramAddr: u32 = undefined, cartAddr: u32 = undefined, writeLen: u32 = undefined,
     piStatus: PIStatus = PIStatus{},
@@ -89,13 +81,8 @@ const PIRegs = struct {
 
 var piRegs = PIRegs{};
 
-var siStatus = SIStatus{};
-
 pub var ram: []u8 = undefined; // RDRAM
 var rom: []u8 = undefined; // Cartridge ROM
-
-// PIF memory
-var pifRAM: [0x40]u8 = undefined;
 
 // RSP memory
 var spDMEM: []u8 = undefined;
@@ -254,16 +241,7 @@ pub fn read32(pAddr: u64) u32 {
             }
         },
         @enumToInt(MemoryRegion.SI) => {
-            switch (pAddr_ & 0xF_FFFF) {
-                0x0_0018 => {
-                    data = @bitCast(u32, siStatus);
-                },
-                else => {
-                    std.log.warn("[Bus] Unhandled read32 @ pAddr {X}h (Serial Interface).", .{pAddr_});
-
-                    data = 0;
-                }
-            }
+            return si.read32(pAddr_);
         },
         @enumToInt(MemoryRegion.CartS) ... @enumToInt(MemoryRegion.CartE) => {
             @memcpy(@ptrCast([*]u8, &data), @ptrCast([*]u8, &rom[pAddr_ - 0x1000_0000]), 4);
@@ -273,7 +251,7 @@ pub fn read32(pAddr: u64) u32 {
             if (pAddr_ >= 0x1FC0_07C0 and pAddr_ < 0x1FC0_0800) {
                 std.log.info("[Bus] Read32 @ pAddr {X}h (PIF RAM).", .{pAddr_});
 
-                @memcpy(@ptrCast([*]u8, &data), @ptrCast([*]u8, &pifRAM[pAddr_ - 0x1FC0_07C0]), 4);
+                @memcpy(@ptrCast([*]u8, &data), @ptrCast([*]u8, &pif.pifRAM[pAddr_ - 0x1FC0_07C0]), 4);
                 data = @byteSwap(u32, data);
             } else {
                 std.log.warn("[Bus] Unhandled write32 @ pAddr {X}h (PIF), data: {X}h.", .{pAddr_, data});
@@ -460,32 +438,7 @@ pub fn write32(pAddr: u64, data: u32) void {
             }
         },
         @enumToInt(MemoryRegion.SI) => {
-            switch (pAddr_ & 0xF_FFFF) {
-                0x0_0000 => {
-                    std.log.warn("[Bus] Unhandled write32 @ pAddr {X}h (SI DRAM Address), data: {X}h.", .{pAddr_, data});
-
-                    siDRAMAddr = data & 0xFF_FFFF;
-                },
-                0x0_0004 ... 0x0_0014 => {
-                    std.log.warn("[Bus] Unhandled write32 @ pAddr {X}h (SI RD/WR Address), data: {X}h.", .{pAddr_, data});
-                    
-                    @memset(@ptrCast([*]u8, &ram[siDRAMAddr]), 0, 64);
-
-                    siStatus.dmaIRQ = true;
-
-                    mi.setPending(mi.InterruptSource.SI);
-                },
-                0x0_0018 => {
-                    std.log.warn("[Bus] Unhandled write32 @ pAddr {X}h (SI Status), data: {X}h.", .{pAddr_, data});
-
-                    siStatus.dmaIRQ = false;
-
-                    mi.clearPending(mi.InterruptSource.SI);
-                },
-                else => {
-                    std.log.warn("[Bus] Unhandled write32 @ pAddr {X}h (Serial Interface), data: {X}h.", .{pAddr_, data});
-                }
-            }
+            si.write32(pAddr_, data);
         },
         @enumToInt(MemoryRegion.PIF) => {
             if (pAddr_ >= 0x1FC0_07C0 and pAddr_ < 0x1FC0_0800) {
@@ -493,7 +446,7 @@ pub fn write32(pAddr: u64, data: u32) void {
 
                 const data_ = @byteSwap(u32, data);
 
-                @memcpy(@ptrCast([*]u8, &pifRAM[pAddr_ - 0x1FC0_07C0]), @ptrCast([*]const u8, &data_), 4);
+                @memcpy(@ptrCast([*]u8, &pif.pifRAM[pAddr_ - 0x1FC0_07C0]), @ptrCast([*]const u8, &data_), 4);
             } else {
                 std.log.warn("[Bus] Unhandled write32 @ pAddr {X}h (PIF), data: {X}h.", .{pAddr_, data});
 

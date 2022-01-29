@@ -560,8 +560,17 @@ fn decodeInstr(instr: u32) void {
                     const funct = instr & 0x3F;
 
                     switch (funct) {
-                        @enumToInt(CO1.CVT_S) => cop1.fCVT_S(instr, Fmt.D),
+                        @enumToInt(CO1.ADD    ) => cop1.fADD    (instr, Fmt.D),
+                        @enumToInt(CO1.SUB    ) => cop1.fSUB    (instr, Fmt.D),
+                        @enumToInt(CO1.MUL    ) => cop1.fMUL    (instr, Fmt.D),
+                        @enumToInt(CO1.DIV    ) => cop1.fDIV    (instr, Fmt.D),
+                        @enumToInt(CO1.MOV    ) => cop1.fMOV    (instr, Fmt.D),
+                        @enumToInt(CO1.CVT_S  ) => cop1.fCVT_S  (instr, Fmt.D),
+                        @enumToInt(CO1.TRUNC_W) => cop1.fTRUNC_W(instr, Fmt.D),
                         // @enumToInt(CO1.CVT_D) => cop1.fCVT_D(instr, Fmt.D),
+                        @enumToInt(CO1.C) ... @enumToInt(CO1.C) + 0xF => {
+                            cop1.fC(instr, @truncate(u4, instr), Fmt.D);
+                        },
                         else => {
                             warn("[CPU] Unhandled CO1(D) function {X}h ({X}h).", .{funct, instr});
 

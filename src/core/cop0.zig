@@ -169,7 +169,7 @@ pub fn set32(idx: u32, data: u32) void {
         else => {}
     }
     
-    std.log.info("[COP0] Write {s}, data: {X}h.", .{@tagName(@intToEnum(COP0Reg, idx)), data});
+    // std.log.info("[COP0] Write {s}, data: {X}h.", .{@tagName(@intToEnum(COP0Reg, idx)), data});
 }
 
 pub fn checkForInterrupts() bool {

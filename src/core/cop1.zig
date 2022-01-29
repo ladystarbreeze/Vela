@@ -203,6 +203,19 @@ pub fn fC(instr: u32, cond: u4, fmt: comptime Fmt) void {
                 if (s == t) cond_ |= 4;
             }
         },
+        Fmt.D => {
+            const s = @intToFloat(f64, getFGR64(fs));
+            const t = @intToFloat(f64, getFGR64(ft));
+
+            if (math.isNan(s) or math.isNan(t)) {
+                if ((cond & 8) != 0) @panic("c.cond: invalid operation");
+
+                cond_ = 1;
+            } else {
+                if (s <  t) cond_ |= 2;
+                if (s == t) cond_ |= 4;
+            }
+        },
         else => {
             @panic("c.cond: unhandled fmt");
         }
@@ -280,6 +293,7 @@ pub fn fMOV(instr: u32, fmt: comptime Fmt) void {
 
     switch (fmt) {
         Fmt.S => setFGR32(fd, @bitCast(u32, @intToFloat(f32, getFGR32(fs)))),
+        Fmt.D => setFGR64(fd, @bitCast(u64, @intToFloat(f64, getFGR64(fs)))),
         else => {
             @panic("mov unhandled fmt");
         }
@@ -296,6 +310,7 @@ pub fn fMUL(instr: u32, fmt: comptime Fmt) void {
 
     switch (fmt) {
         Fmt.S => setFGR32(fd, @bitCast(u32, @intToFloat(f32, getFGR32(fs)) * @intToFloat(f32, getFGR32(ft)))),
+        Fmt.D => setFGR64(fd, @bitCast(u64, @intToFloat(f64, getFGR64(fs)) * @intToFloat(f64, getFGR64(ft)))),
         else => {
             @panic("mul: unhandled fmt");
         }
@@ -330,6 +345,7 @@ pub fn fTRUNC_W(instr: u32, fmt: comptime Fmt) void {
 
     switch (fmt) {
         Fmt.S => data = @floatToInt(u32, @trunc(@bitCast(f32, getFGR32(fs)))),
+        Fmt.D => data = @truncate(u32, @floatToInt(u64, @trunc(@bitCast(f64, getFGR64(fs))))),
         else => {
             @panic("trunc.w: unhandled fmt");
         }
