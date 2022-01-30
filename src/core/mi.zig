@@ -61,6 +61,8 @@ pub fn write32(pAddr: u64, data: u32) void {
         @enumToInt(MIReg.MIMask) => {
             std.log.info("[MI] Write32 @ pAddr {X}h (MI Mask), data: {X}h.", .{pAddr, data});
 
+            if ((data & (1 << 0)) != 0) miMask &= ~@enumToInt(InterruptSource.SP);
+            if ((data & (1 << 1)) != 0) miMask |=  @enumToInt(InterruptSource.SP);
             if ((data & (1 << 2)) != 0) miMask &= ~@enumToInt(InterruptSource.SI);
             if ((data & (1 << 3)) != 0) miMask |=  @enumToInt(InterruptSource.SI);
             if ((data & (1 << 6)) != 0) miMask &= ~@enumToInt(InterruptSource.VI);

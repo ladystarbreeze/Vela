@@ -110,6 +110,8 @@ const Special = enum(u32) {
     MULTU  = 0x19,
     DIV    = 0x1A,
     DIVU   = 0x1B,
+    DMULTU = 0x1D,
+    DDIVU  = 0x1F,
     ADD    = 0x20,
     ADDU   = 0x21,
     SUBU   = 0x23,
@@ -160,7 +162,9 @@ const COP1 = enum(u32) {
 
 /// CO function
 const CO = enum(u32) {
+    TLBR  = 0x01,
     TLBWI = 0x02,
+    TLBP  = 0x08,
     ERET  = 0x18,
 };
 
@@ -170,10 +174,12 @@ const CO1 = enum(u32) {
     SUB     = 0x01,
     MUL     = 0x02,
     DIV     = 0x03,
+    SQRT    = 0x04,
     MOV     = 0x06,
     TRUNC_W = 0x0D,
     CVT_S   = 0x20,
     CVT_D   = 0x21,
+    CVT_W   = 0x24,
     C       = 0x30,
 };
 
@@ -429,6 +435,8 @@ fn decodeInstr(instr: u32) void {
                 @enumToInt(Special.MULTU ) => iMULTU (instr),
                 @enumToInt(Special.DIV   ) => iDIV   (instr),
                 @enumToInt(Special.DIVU  ) => iDIVU  (instr),
+                @enumToInt(Special.DMULTU) => iDMULTU(instr),
+                @enumToInt(Special.DDIVU ) => iDDIVU (instr),
                 @enumToInt(Special.ADD   ) => iADD   (instr),
                 @enumToInt(Special.ADDU  ) => iADDU  (instr),
                 @enumToInt(Special.SUB   ) => iSUB   (instr),
@@ -489,8 +497,14 @@ fn decodeInstr(instr: u32) void {
                     const funct = instr & 0x3F;
 
                     switch (funct) {
+                        @enumToInt(CO.TLBR) => {
+                            if (isDisasm) warn("[CPU] Unhandled TLBR instruction.", .{});
+                        },
                         @enumToInt(CO.TLBWI) => {
                             if (isDisasm) warn("[CPU] Unhandled TLBWI instruction.", .{});
+                        },
+                        @enumToInt(CO.TLBP) => {
+                            if (isDisasm) warn("[CPU] Unhandled TLBP instruction.", .{});
                         },
                         @enumToInt(CO.ERET ) => iERET(),
                         else => {
@@ -540,10 +554,12 @@ fn decodeInstr(instr: u32) void {
                         @enumToInt(CO1.SUB    ) => cop1.fSUB    (instr, Fmt.S),
                         @enumToInt(CO1.MUL    ) => cop1.fMUL    (instr, Fmt.S),
                         @enumToInt(CO1.DIV    ) => cop1.fDIV    (instr, Fmt.S),
+                        @enumToInt(CO1.SQRT   ) => cop1.fSQRT   (instr, Fmt.S),
                         @enumToInt(CO1.MOV    ) => cop1.fMOV    (instr, Fmt.S),
                         @enumToInt(CO1.TRUNC_W) => cop1.fTRUNC_W(instr, Fmt.S),
                         // @enumToInt(CO1.CVT_S  ) => cop1.fCVT_S   (instr, Fmt.S),
                         // @enumToInt(CO1.CVT_D  ) => cop1.fCVT_D   (instr, Fmt.S),
+                        @enumToInt(CO1.CVT_W  ) => cop1.fCVT_W   (instr, Fmt.S),
                         @enumToInt(CO1.C) ... @enumToInt(CO1.C) + 0xF => {
                             cop1.fC(instr, @truncate(u4, instr), Fmt.S);
                         },
@@ -1050,6 +1066,27 @@ fn iDADDU(instr: u32) void {
     if (isDisasm) info("[CPU] DADDU ${}, ${}, ${}; ${} = {X}h", .{rd, rs, rt, rd, regs.get(rd)});
 }
 
+/// DDIVU - Doubleword DIVide Unsigned
+fn iDDIVU(instr: u32) void {
+    const rs = getRs(instr);
+    const rt = getRt(instr);
+
+    const n = regs.get(rs);
+    const d = regs.get(rt);
+
+    if (d == 0) {
+        warn("[CPU] DDIVU by zero.", .{});
+
+        regs.lo = 0xFFFFFFFF_FFFFFFFF;
+        regs.hi = n;
+    } else {
+        regs.lo = n / d;
+        regs.hi = n % d;
+    }
+
+    if (isDisasm) info("[CPU] DDIVU ${}, ${}; HI = {X}h, LO = {X}h", .{rs, rt, regs.hi, regs.lo});
+}
+
 /// DIV - DIVide
 fn iDIV(instr: u32) void {
     const rs = getRs(instr);
@@ -1102,6 +1139,19 @@ fn iDIVU(instr: u32) void {
     }
 
     if (isDisasm) info("[CPU] DIVU ${}, ${}; HI = {X}h, LO = {X}h", .{rs, rt, regs.hi, regs.lo});
+}
+
+/// DMULTU - Doubleword MULTply Unsigned
+fn iDMULTU(instr: u32) void {
+    const rs = getRs(instr);
+    const rt = getRt(instr);
+
+    const result = @intCast(u128, regs.get(rs)) * @intCast(u128, regs.get(rt));
+
+    regs.lo = @truncate(u64, result >>  0);
+    regs.hi = @truncate(u64, result >> 64);
+
+    if (isDisasm) info("[CPU] DMULTU ${}, ${}; HI = {X}h, LO = {X}h", .{rs, rt, regs.hi, regs.lo});
 }
 
 /// DSLL - Doubleword Shift Left Logical

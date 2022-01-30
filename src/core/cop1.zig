@@ -267,6 +267,25 @@ pub fn fCVT_S(instr: u32, fmt: comptime Fmt) void {
     if (isDisasm) info("[FPU] CVT.S.{s} ${}, ${}; ${} = {X}h", .{@tagName(fmt), fd, fs, fd, @bitCast(u32, data)});
 }
 
+/// CVT.W - ConVerT to Word
+pub fn fCVT_W(instr: u32, fmt: comptime Fmt) void {
+    const fd = getFd(instr);
+    const fs = getFs(instr);
+
+    var data: u32 = undefined;
+
+    switch (fmt) {
+        Fmt.S => data = @floatToInt(u32, @bitCast(f32, getFGR32(fs))),
+        else => {
+            @panic("cvt.w: unhandled fmt");
+        }
+    }
+
+    setFGR32(fd, data);
+
+    if (isDisasm) info("[FPU] CVT.W.{s} ${}, ${}; ${} = {X}h", .{@tagName(fmt), fd, fs, fd, @bitCast(u32, data)});
+}
+
 /// DIV - DIVide
 pub fn fDIV(instr: u32, fmt: comptime Fmt) void {
     const fd = getFd(instr);
@@ -317,6 +336,23 @@ pub fn fMUL(instr: u32, fmt: comptime Fmt) void {
     }
 
     if (isDisasm) info("[FPU] MUL.{s} ${}, ${}, ${}; ${} = {X}h", .{@tagName(fmt), fd, fs, ft, fd, getFGR64(fd)});
+}
+
+/// SQRT - SQuare RooT
+pub fn fSQRT(instr: u32, fmt: comptime Fmt) void {
+    const fd = getFd(instr);
+    const fs = getFs(instr);
+
+    var data: f32 = undefined;
+
+    switch (fmt) {
+        Fmt.S => setFGR32(fd, @bitCast(u32, @sqrt(@intToFloat(f32, getFGR32(fs))))),
+        else => {
+            @panic("mov unhandled fmt");
+        }
+    }
+
+    if (isDisasm) info("[FPU] MOV.{s} ${}, ${}; ${} = {X}h", .{@tagName(fmt), fd, fs, fd, @bitCast(u32, data)});
 }
 
 /// SUB - SUB

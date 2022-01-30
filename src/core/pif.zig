@@ -18,6 +18,7 @@ const PIFCommand = enum(u8) {
     GetStatus    = 0x00,
     GetButtons   = 0x01,
     WriteMemcard = 0x03,
+    Reset        = 0xFF,
 };
 
 // PIF constants
@@ -51,7 +52,7 @@ pub fn checkStatus() void {
                 const cmd = pifRAM[idx + 2];
 
                 switch (cmd) {
-                    @enumToInt(PIFCommand.GetStatus) => {
+                    @enumToInt(PIFCommand.GetStatus), @enumToInt(PIFCommand.Reset) => {
                         info("[PIF] Get Controller Status.", .{});
 
                         if (channel == 0) {

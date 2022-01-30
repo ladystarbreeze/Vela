@@ -36,6 +36,7 @@ const si = @import("si.zig");
 const vi = @import("vi.zig");
 
 const pif = @import("pif.zig");
+const rsp = @import("rsp.zig");
 
 const MemoryRegion = enum(u64) {
     RDRAM0 = 0x000, RDRAM1 = 0x001, RDRAM2 = 0x002, RDRAM3 = 0x003,
@@ -84,26 +85,19 @@ var piRegs = PIRegs{};
 pub var ram: []u8 = undefined; // RDRAM
 var rom: []u8 = undefined; // Cartridge ROM
 
-// RSP memory
-var spDMEM: []u8 = undefined;
-var spIMEM: []u8 = undefined;
-
 /// Initialize bus module
 pub fn init(alloc: std.mem.Allocator, romPath: []const u8, isFastBoot: bool) anyerror!void {
     ram = try alloc.alloc(u8, 0x80_0000);
-
-    spDMEM = try alloc.alloc(u8, 0x1000);
-    spIMEM = try alloc.alloc(u8, 0x1000);
     
     // Load ROM file
     const romFile = try std.fs.cwd().openFile(romPath, .{.read = true},);
     defer romFile.close();
 
-    rom = try romFile.reader().readAllAlloc(alloc, 0x40_0000);
+    rom = try romFile.reader().readAllAlloc(alloc, 0x80_0000);
 
     if (isFastBoot) {
         // Copy first 1000h bytes of ROM to SP DMEM
-        @memcpy(@ptrCast([*]u8, spDMEM), @ptrCast([*]u8, rom), 0x1000);
+        @memcpy(@ptrCast([*]u8, &rsp.spDMEM), @ptrCast([*]u8, rom), 0x1000);
     }
 }
 
@@ -111,9 +105,6 @@ pub fn init(alloc: std.mem.Allocator, romPath: []const u8, isFastBoot: bool) any
 pub fn deinit(alloc: std.mem.Allocator) void {
     alloc.free(ram);
     alloc.free(rom);
-
-    alloc.free(spDMEM);
-    alloc.free(spIMEM);
 }
 
 pub fn read8(pAddr: u64) u8 {
@@ -126,17 +117,7 @@ pub fn read8(pAddr: u64) u8 {
             data = ram[pAddr_ & 0x7F_FFFF];
         },
         @enumToInt(MemoryRegion.RSP) => {
-            switch ((pAddr_ >> 12) & 0xFF) {
-                0x00 => {
-                    data = spDMEM[pAddr_ & 0xFFF];
-                },
-                0x01 => {
-                    data = spIMEM[pAddr_ & 0xFFF];
-                },
-                else => {
-                    unreachable;
-                }
-            }
+            data = rsp.read8(pAddr_);
         },
         else => {
             std.log.warn("[Bus] Unhandled read8 @ pAddr {X}h.", .{pAddr_});
@@ -188,21 +169,7 @@ pub fn read32(pAddr: u64) u32 {
             }
         },
         @enumToInt(MemoryRegion.RSP) => {
-            switch ((pAddr_ >> 12) & 0xFF) {
-                0x00 => {
-                    @memcpy(@ptrCast([*]u8, &data), @ptrCast([*]u8, &spDMEM[pAddr_ & 0xFFF]), 4);
-                    data = @byteSwap(u32, data);
-                },
-                0x01 => {
-                    @memcpy(@ptrCast([*]u8, &data), @ptrCast([*]u8, &spIMEM[pAddr_ & 0xFFF]), 4);
-                    data = @byteSwap(u32, data);
-                },
-                else => {
-                    std.log.warn("[Bus] Unhandled read32 @ pAddr {X}h (RSP I/O).", .{pAddr_});
-
-                    data = 0;
-                }
-            }
+            data = rsp.read32(pAddr_);
         },
         @enumToInt(MemoryRegion.MI) => {
             return mi.read32(pAddr_);
@@ -303,14 +270,7 @@ pub fn write8(pAddr: u64, data: u8) void {
             ram[pAddr_ & 0x7F_FFFF] = data;
         },
         @enumToInt(MemoryRegion.RSP) => {
-            switch ((pAddr_ >> 12) & 0xFF) {
-                0x01 => {
-                    spIMEM[pAddr_ & 0xFFF] = data;
-                },
-                else => {
-                    unreachable;
-                }
-            }
+            rsp.write8(pAddr_, data);
         },
         else => {
             std.log.warn("[Bus] Unhandled write8 @ pAddr {X}h, data: {X}h.", .{pAddr_, data});
@@ -356,19 +316,7 @@ pub fn write32(pAddr: u64, data: u32) void {
             }
         },
         @enumToInt(MemoryRegion.RSP) => {
-            const data_ = @byteSwap(u32, data);
-
-            switch ((pAddr_ >> 12) & 0xFF) {
-                0x00 => {
-                    @memcpy(@ptrCast([*]u8, &spDMEM[pAddr_ & 0xFFF]), @ptrCast([*]const u8, &data_), 4);
-                },
-                0x01 => {
-                    @memcpy(@ptrCast([*]u8, &spIMEM[pAddr_ & 0xFFF]), @ptrCast([*]const u8, &data_), 4);
-                },
-                else => {
-                    std.log.warn("[Bus] Unhandled write32 @ pAddr {X}h (RSP I/O), data: {X}h.", .{pAddr_, data});
-                }
-            }
+            rsp.write32(pAddr_, data);
         },
         @enumToInt(MemoryRegion.MI) => {
             mi.write32(pAddr_, data);
