@@ -10,6 +10,8 @@ const SDL = @import("sdl2");
 
 const bus = @import("bus.zig");
 const cpu = @import("cpu.zig");
+const rsp = @import("rsp.zig");
+
 const vi  = @import("vi.zig");
 
 const Controller = packed struct {
@@ -97,6 +99,8 @@ pub fn run(romPath: []const u8) anyerror!void {
 
     mainLoop: while (true) {
         const c = cpu.step();
+
+        rsp.step();
 
         cyclesRem -= c;
         lineRem   -= c;

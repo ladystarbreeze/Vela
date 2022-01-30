@@ -1823,6 +1823,7 @@ fn iSW(instr: u32) void {
 
     if (isDisasm) info("[CPU] SW ${}, ${}({}); ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), addr, @truncate(u32, regs.get(rt))});
 }
+
 /// SWC1 - Store Word Coprocessor 1
 fn iSWC1(instr: u32) void {
     if (!checkCOPUsable(1)) return;
