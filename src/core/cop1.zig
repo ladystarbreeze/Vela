@@ -68,7 +68,7 @@ const FCR31 = packed struct {
     _pad1  : u7   = 0,
 };
 
-var isDisasm = true;
+var isDisasm = false;
 
 var fprs: [32]u64 = undefined;
 
@@ -236,6 +236,7 @@ pub fn fCVT_D(instr: u32, fmt: comptime Fmt) void {
     var data: f64 = undefined;
 
     switch (fmt) {
+        Fmt.S => data = @floatCast(f64, @bitCast(f32, getFGR32(fs))),
         Fmt.W => data = @intToFloat(f64, getFGR32(fs)),
         else => {
             @panic("cvt.d: unhandled fmt");
@@ -275,7 +276,9 @@ pub fn fCVT_W(instr: u32, fmt: comptime Fmt) void {
     var data: u32 = undefined;
 
     switch (fmt) {
-        Fmt.S => data = @floatToInt(u32, @bitCast(f32, getFGR32(fs))),
+        // Fmt.S => data = @truncate(u32, @floatToInt(u64, @floatCast(f64, @bitCast(f32, getFGR32(fs))))),
+        Fmt.S => data = 0,
+        Fmt.D => data = @truncate(u32, @floatToInt(u64, @bitCast(f64, getFGR64(fs)))),
         else => {
             @panic("cvt.w: unhandled fmt");
         }
@@ -314,7 +317,7 @@ pub fn fMOV(instr: u32, fmt: comptime Fmt) void {
         Fmt.S => setFGR32(fd, @bitCast(u32, @intToFloat(f32, getFGR32(fs)))),
         Fmt.D => setFGR64(fd, @bitCast(u64, @intToFloat(f64, getFGR64(fs)))),
         else => {
-            @panic("mov unhandled fmt");
+            @panic("mov: unhandled fmt");
         }
     }
 
@@ -336,6 +339,23 @@ pub fn fMUL(instr: u32, fmt: comptime Fmt) void {
     }
 
     if (isDisasm) info("[FPU] MUL.{s} ${}, ${}, ${}; ${} = {X}h", .{@tagName(fmt), fd, fs, ft, fd, getFGR64(fd)});
+}
+
+/// NEG - NEGate
+pub fn fNEG(instr: u32, fmt: comptime Fmt) void {
+    const fd = getFd(instr);
+    const fs = getFs(instr);
+
+    var data: f32 = undefined;
+
+    switch (fmt) {
+        Fmt.S => setFGR32(fd, @bitCast(u32, -@intToFloat(f32, getFGR32(fs)))),
+        else => {
+            @panic("neg: unhandled fmt");
+        }
+    }
+
+    if (isDisasm) info("[FPU] NEG.{s} ${}, ${}; ${} = {X}h", .{@tagName(fmt), fd, fs, fd, @bitCast(u32, data)});
 }
 
 /// SQRT - SQuare RooT
@@ -380,7 +400,7 @@ pub fn fTRUNC_W(instr: u32, fmt: comptime Fmt) void {
     var data: u32 = undefined;
 
     switch (fmt) {
-        Fmt.S => data = @floatToInt(u32, @trunc(@bitCast(f32, getFGR32(fs)))),
+        Fmt.S => data = @bitCast(u32, @trunc(@bitCast(f32, getFGR32(fs)))),
         Fmt.D => data = @truncate(u32, @floatToInt(u64, @trunc(@bitCast(f64, getFGR64(fs))))),
         else => {
             @panic("trunc.w: unhandled fmt");

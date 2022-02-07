@@ -111,6 +111,7 @@ const Special = enum(u32) {
     DIV    = 0x1A,
     DIVU   = 0x1B,
     DMULTU = 0x1D,
+    DDIV   = 0x1E,
     DDIVU  = 0x1F,
     ADD    = 0x20,
     ADDU   = 0x21,
@@ -176,6 +177,7 @@ const CO1 = enum(u32) {
     DIV     = 0x03,
     SQRT    = 0x04,
     MOV     = 0x06,
+    NEG     = 0x07,
     TRUNC_W = 0x0D,
     CVT_S   = 0x20,
     CVT_D   = 0x21,
@@ -297,61 +299,57 @@ fn getTarget(instr: u32) u32 {
     return (instr << 2) & 0xFFF_FFFF;
 }
 
+fn translateAddress(addr: u64) u64 {
+    switch ((addr >> 28) & 0xF) {
+        0x0 ... 0x7 => {
+            info("PC: {X}h", .{regs.cpc});
+
+            return cop0.tlbTranslate(addr & 0xFFFF_FFFF);
+        },
+        0x8 ... 0xB => return addr & 0x1FFF_FFFF,
+        0xC ... 0xF => return cop0.tlbTranslate(addr & 0xFFFF_FFFF),
+        else => unreachable,
+    }
+}
+
 /// Reads an 8-bit byte from memory
 fn read8(addr: u64) u8 {
-    // TODO: address translation
-
-    return bus.read8(addr);
+    return bus.read8(translateAddress(addr));
 }
 
 /// Reads a 16-bit halfword from memory
 fn read16(addr: u64) u16 {
-    // TODO: address translation
-
-    return bus.read16(addr);
+    return bus.read16(translateAddress(addr));
 }
 
 /// Reads a 32-bit word from memory
 fn read32(addr: u64) u32 {
-    // TODO: address translation
-
-    return bus.read32(addr);
+    return bus.read32(translateAddress(addr));
 }
 
 /// Reads a 64-bit word from memory
 fn read64(addr: u64) u64 {
-    // TODO: address translation
-
-
-    return bus.read64(addr);
+    return bus.read64(translateAddress(addr));
 }
 
 /// Writes an 8-bit byte to memory
 fn store8(addr: u64, data: u8) void {
-    // TODO: address translation
-
-    bus.write8(addr, data);
+    bus.write8(translateAddress(addr), data);
 }
 
 /// Writes a 16-bit halfword to memory
 fn store16(addr: u64, data: u16) void {
-    // TODO: address translation
-
-    bus.write16(addr, data);
+    bus.write16(translateAddress(addr), data);
 }
 
 /// Writes a 32-bit word to memory
 fn store32(addr: u64, data: u32) void {
-    // TODO: address translation
-
-    bus.write32(addr, data);
+    bus.write32(translateAddress(addr), data);
 }
 
 /// Writes a 64-bit doubleword to memory
 fn store64(addr: u64, data: u64) void {
-    // TODO: address translation
-
-    bus.write64(addr, data);
+    bus.write64(translateAddress(addr), data);
 }
 
 /// Reads an instruction, increments PC
@@ -436,6 +434,7 @@ fn decodeInstr(instr: u32) void {
                 @enumToInt(Special.DIV   ) => iDIV   (instr),
                 @enumToInt(Special.DIVU  ) => iDIVU  (instr),
                 @enumToInt(Special.DMULTU) => iDMULTU(instr),
+                @enumToInt(Special.DDIV  ) => iDDIV  (instr),
                 @enumToInt(Special.DDIVU ) => iDDIVU (instr),
                 @enumToInt(Special.ADD   ) => iADD   (instr),
                 @enumToInt(Special.ADDU  ) => iADDU  (instr),
@@ -497,15 +496,9 @@ fn decodeInstr(instr: u32) void {
                     const funct = instr & 0x3F;
 
                     switch (funct) {
-                        @enumToInt(CO.TLBR) => {
-                            if (isDisasm) warn("[CPU] Unhandled TLBR instruction.", .{});
-                        },
-                        @enumToInt(CO.TLBWI) => {
-                            if (isDisasm) warn("[CPU] Unhandled TLBWI instruction.", .{});
-                        },
-                        @enumToInt(CO.TLBP) => {
-                            if (isDisasm) warn("[CPU] Unhandled TLBP instruction.", .{});
-                        },
+                        @enumToInt(CO.TLBR ) => iTLBR(),
+                        @enumToInt(CO.TLBWI) => iTLBWI(),
+                        @enumToInt(CO.TLBP ) => iTLBP(),
                         @enumToInt(CO.ERET ) => iERET(),
                         else => {
                             warn("[CPU] Unhandled CO function {X}h ({X}h).", .{funct, instr});
@@ -556,9 +549,10 @@ fn decodeInstr(instr: u32) void {
                         @enumToInt(CO1.DIV    ) => cop1.fDIV    (instr, Fmt.S),
                         @enumToInt(CO1.SQRT   ) => cop1.fSQRT   (instr, Fmt.S),
                         @enumToInt(CO1.MOV    ) => cop1.fMOV    (instr, Fmt.S),
+                        @enumToInt(CO1.NEG    ) => cop1.fNEG    (instr, Fmt.S),
                         @enumToInt(CO1.TRUNC_W) => cop1.fTRUNC_W(instr, Fmt.S),
                         // @enumToInt(CO1.CVT_S  ) => cop1.fCVT_S   (instr, Fmt.S),
-                        // @enumToInt(CO1.CVT_D  ) => cop1.fCVT_D   (instr, Fmt.S),
+                        @enumToInt(CO1.CVT_D  ) => cop1.fCVT_D   (instr, Fmt.S),
                         @enumToInt(CO1.CVT_W  ) => cop1.fCVT_W   (instr, Fmt.S),
                         @enumToInt(CO1.C) ... @enumToInt(CO1.C) + 0xF => {
                             cop1.fC(instr, @truncate(u4, instr), Fmt.S);
@@ -581,8 +575,9 @@ fn decodeInstr(instr: u32) void {
                         @enumToInt(CO1.MUL    ) => cop1.fMUL    (instr, Fmt.D),
                         @enumToInt(CO1.DIV    ) => cop1.fDIV    (instr, Fmt.D),
                         @enumToInt(CO1.MOV    ) => cop1.fMOV    (instr, Fmt.D),
-                        @enumToInt(CO1.CVT_S  ) => cop1.fCVT_S  (instr, Fmt.D),
                         @enumToInt(CO1.TRUNC_W) => cop1.fTRUNC_W(instr, Fmt.D),
+                        @enumToInt(CO1.CVT_S  ) => cop1.fCVT_S  (instr, Fmt.D),
+                        @enumToInt(CO1.CVT_W  ) => cop1.fCVT_W  (instr, Fmt.D),
                         // @enumToInt(CO1.CVT_D) => cop1.fCVT_D(instr, Fmt.D),
                         @enumToInt(CO1.C) ... @enumToInt(CO1.C) + 0xF => {
                             cop1.fC(instr, @truncate(u4, instr), Fmt.D);
@@ -1064,6 +1059,40 @@ fn iDADDU(instr: u32) void {
     regs.set64(rd, regs.get(rs) +% regs.get(rt));
 
     if (isDisasm) info("[CPU] DADDU ${}, ${}, ${}; ${} = {X}h", .{rd, rs, rt, rd, regs.get(rd)});
+}
+
+/// DDIV - Doubleword DIVide
+fn iDDIV(instr: u32) void {
+    const rs = getRs(instr);
+    const rt = getRt(instr);
+
+    const n = @bitCast(i64, regs.get(rs));
+    const d = @bitCast(i64, regs.get(rt));
+
+    if (d == 0) {
+        warn("[CPU] DIV by zero.", .{});
+
+        if (n < 0) {
+            regs.lo = 1;
+        } else {
+            regs.lo = 0xFFFFFFFF_FFFFFFFF;
+        }
+
+        regs.hi = @bitCast(u64, n);
+    } else if (n == -0x80000000_00000000 and d == -1) {
+        regs.lo = 0x8_00000000;
+        regs.hi = 0;
+    } else {
+        regs.lo = @bitCast(u64, @divFloor(n, d));
+
+        if (d < 0) {
+            regs.hi = @bitCast(u64, @rem(n, -d));
+        } else {
+            regs.hi = @bitCast(u64, n) % @bitCast(u64, d);
+        }
+    }
+
+    if (isDisasm) info("[CPU] DDIV ${}, ${}; HI = {X}h, LO = {X}h", .{rs, rt, regs.hi, regs.lo});
 }
 
 /// DDIVU - Doubleword DIVide Unsigned
@@ -1876,6 +1905,56 @@ fn iSWR(instr: u32) void {
     store32(addr & 0xFFFFFFFC, (data & ~mask) | (@truncate(u32, regs.get(rt)) << shift));
 
     if (isDisasm) info("[CPU] SWR ${}, ${}({}); ({X}h) = {X}h", .{rt, base, @bitCast(i64, imm), addr, @truncate(u32, regs.get(rt))});
+}
+
+/// TLBP - TLB Probe
+fn iTLBP() void {
+    cop0.index.p = true;
+
+    var idx: u7 = 0;
+    while (idx < 32) : (idx += 1) {
+        const e = cop0.tlbEntries[idx];
+
+        if ((e.entryHi.vpn2l == cop0.entryHi.vpn2l and e.entryHi.vpn2h == cop0.entryHi.vpn2h) and 
+            (e.entryHi.g or e.entryHi.asid == cop0.entryHi.asid)) {
+            cop0.index.index = @truncate(u5, idx);
+        }
+    }
+
+    info("[CPU] TLBP", .{});
+}
+
+/// TLBR - TLB Read
+fn iTLBR() void {
+    const idx = cop0.index.index;
+
+    const g = @intCast(u32, @bitCast(u1, cop0.tlbEntries[idx].entryHi.g));
+
+    const entryLo0 = @bitCast(u32, cop0.tlbEntries[idx].entryLo0);
+    const entryLo1 = @bitCast(u32, cop0.tlbEntries[idx].entryLo1);
+    const entryHi  = @bitCast(u32, cop0.tlbEntries[idx].entryHi);
+    const pageMask = @bitCast(u32, cop0.tlbEntries[idx].pageMask);
+
+    cop0.set32(@enumToInt(cop0.COP0Reg.EntryLo0), entryLo0 | g);
+    cop0.set32(@enumToInt(cop0.COP0Reg.EntryLo1), entryLo1 | g);
+    cop0.set32(@enumToInt(cop0.COP0Reg.EntryHi ), entryHi);
+    cop0.set32(@enumToInt(cop0.COP0Reg.PageMask), pageMask);
+
+    info("[CPU] TLBR", .{});
+}
+
+/// TLBWI - TLB Write Indexed
+fn iTLBWI() void {
+    const idx = cop0.index.index;
+
+    cop0.tlbEntries[idx].entryLo0 = @bitCast(cop0.EntryLo, @bitCast(u32, cop0.entryLo0) & 0xFFFF_FFFE);
+    cop0.tlbEntries[idx].entryLo1 = @bitCast(cop0.EntryLo, @bitCast(u32, cop0.entryLo1) & 0xFFFF_FFFE);
+    cop0.tlbEntries[idx].entryHi  = @bitCast(cop0.EntryHi, @bitCast(u32, cop0.entryHi) & ~@bitCast(u32, cop0.pageMask));
+    cop0.tlbEntries[idx].pageMask = cop0.pageMask;
+
+    cop0.tlbEntries[idx].entryHi.g = cop0.entryLo0.g and cop0.entryLo1.g;
+
+    info("[CPU] TLBWI", .{});
 }
 
 /// XOR - XOR

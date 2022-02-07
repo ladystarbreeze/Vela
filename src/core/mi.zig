@@ -61,26 +61,32 @@ pub fn write32(pAddr: u64, data: u32) void {
         @enumToInt(MIReg.MIMask) => {
             std.log.info("[MI] Write32 @ pAddr {X}h (MI Mask), data: {X}h.", .{pAddr, data});
 
-            if ((data & (1 << 0)) != 0) miMask &= ~@enumToInt(InterruptSource.SP);
-            if ((data & (1 << 1)) != 0) miMask |=  @enumToInt(InterruptSource.SP);
-            if ((data & (1 << 2)) != 0) miMask &= ~@enumToInt(InterruptSource.SI);
-            if ((data & (1 << 3)) != 0) miMask |=  @enumToInt(InterruptSource.SI);
-            if ((data & (1 << 6)) != 0) miMask &= ~@enumToInt(InterruptSource.VI);
-            if ((data & (1 << 7)) != 0) miMask |=  @enumToInt(InterruptSource.VI);
-            if ((data & (1 << 8)) != 0) miMask &= ~@enumToInt(InterruptSource.PI);
-            if ((data & (1 << 9)) != 0) miMask |=  @enumToInt(InterruptSource.PI);
+            if ((data & (1 <<  0)) != 0) miMask &= ~@enumToInt(InterruptSource.SP);
+            if ((data & (1 <<  1)) != 0) miMask |=  @enumToInt(InterruptSource.SP);
+            if ((data & (1 <<  2)) != 0) miMask &= ~@enumToInt(InterruptSource.SI);
+            if ((data & (1 <<  3)) != 0) miMask |=  @enumToInt(InterruptSource.SI);
+            if ((data & (1 <<  4)) != 0) miMask &= ~@enumToInt(InterruptSource.AI);
+            if ((data & (1 <<  5)) != 0) miMask |=  @enumToInt(InterruptSource.AI);
+            if ((data & (1 <<  6)) != 0) miMask &= ~@enumToInt(InterruptSource.VI);
+            if ((data & (1 <<  7)) != 0) miMask |=  @enumToInt(InterruptSource.VI);
+            if ((data & (1 <<  8)) != 0) miMask &= ~@enumToInt(InterruptSource.PI);
+            if ((data & (1 <<  9)) != 0) miMask |=  @enumToInt(InterruptSource.PI);
+            if ((data & (1 << 10)) != 0) miMask &= ~@enumToInt(InterruptSource.DP);
+            if ((data & (1 << 11)) != 0) miMask |=  @enumToInt(InterruptSource.DP);
 
             checkForInterrupts();
         },
         else => {
             std.log.warn("[MI] Unhandled write32 @ pAddr {X}h, data: {X}h.", .{pAddr, data});
+
+            if (pAddr == 0x4300000 and (data & 0x800) > 0) clearPending(InterruptSource.DP);
         }
     }
 }
 
 fn checkForInterrupts() void {
     if ((miInterrupt & miMask) != 0) {
-        std.log.info("[MI] INTR: {X}h, MASK: {X}h", .{miInterrupt, miMask});
+        // std.log.info("[MI] INTR: {X}h, MASK: {X}h", .{miInterrupt, miMask});
 
         cop0.setPending(2);
     } else {
@@ -88,14 +94,16 @@ fn checkForInterrupts() void {
     }
 }
 
-pub fn setPending(i: InterruptSource) void {
-    miInterrupt |= @enumToInt(i);
+pub fn setPending(irq: InterruptSource) void {
+    std.log.info("[MI] IRQ Source: {s}", .{@tagName(irq)});
+
+    miInterrupt |= @enumToInt(irq);
 
     checkForInterrupts();
 }
 
-pub fn clearPending(i: InterruptSource) void {
-    miInterrupt &= ~@enumToInt(i);
+pub fn clearPending(irq: InterruptSource) void {
+    miInterrupt &= ~@enumToInt(irq);
 
     checkForInterrupts();
 }

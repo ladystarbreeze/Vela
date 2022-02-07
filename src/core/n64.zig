@@ -12,6 +12,7 @@ const bus = @import("bus.zig");
 const cpu = @import("cpu.zig");
 const rsp = @import("rsp.zig");
 
+const ai  = @import("ai.zig");
 const vi  = @import("vi.zig");
 
 const Controller = packed struct {
@@ -101,6 +102,8 @@ pub fn run(romPath: []const u8) anyerror!void {
         const c = cpu.step();
 
         rsp.step();
+
+        ai.step(c);
 
         cyclesRem -= c;
         lineRem   -= c;

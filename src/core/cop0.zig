@@ -10,7 +10,7 @@ const std = @import("std");
 const raiseException = @import("cpu.zig").raiseException;
 
 /// COP0 register aliases
-const COP0Reg = enum(u32) {
+pub const COP0Reg = enum(u32) {
     Index       =  0,
     Random      =  1,
     EntryLo0    =  2,
@@ -75,6 +75,12 @@ const Cause = packed struct {
     bd     : bool = false,
 };
 
+const Index = packed struct {
+    index: u5   = 0,
+    _pad0: u26  = 0,
+    p    : bool = false,
+};
+
 const Status = packed struct {
     ie : bool = false,
     exl: bool = false,
@@ -91,11 +97,56 @@ const Status = packed struct {
     cu : u4   = 0,
 };
 
+pub const EntryHi = packed struct {
+    asid  : u8   = 0,
+    _pad0 : u4   = 0,
+    g     : bool = false,
+    vpn2l : u3   = 0,
+    vpn2h : u16  = 0,
+};
+
+pub const EntryLo = packed struct {
+    g    : bool = false,
+    v    : bool = false,
+    d    : bool = false,
+    c    : u3   = 0,
+    pfn  : u20  = 0,
+    _pad1: u6   = 0,
+};
+
+const PageMask = packed struct {
+    _pad0: u13 = 0,
+    mask : u12 = 0,
+    _pad1: u7  = 0,
+};
+
+const TLBEntry = packed struct {
+    entryLo0: EntryLo  = EntryLo{},
+    entryLo1: EntryLo  = EntryLo{},
+    entryHi : EntryHi  = EntryHi{},
+    pageMask: PageMask = PageMask{},
+};
+
 pub var cause: Cause = Cause{};
 const causeMask: u32 = 0x0000_0300;
 
+pub var index: Index = Index{};
+const indexMask: u32 = 0x8000_003F;
+
 pub var status: Status = Status{};
-const statusMask: u32 = 0xFE00FFFF;
+const statusMask: u32 = 0xFE00_FFFF;
+
+pub var entryLo0: EntryLo  = EntryLo{};
+pub var entryLo1: EntryLo  = EntryLo{};
+const entryLoMask: u32 = 0x03FF_FFFF;
+
+pub var entryHi : EntryHi  = EntryHi{};
+const entryHiMask: u32 = 0xFFFF_F0FF;
+
+pub var pageMask: PageMask = PageMask{};
+const pageMaskMask: u32 = 0x01FF_E000;
+
+pub var tlbEntries: [32]TLBEntry = undefined;
 
 var count  : u32 = 0;
 var compare: u32 = 0;
@@ -117,8 +168,20 @@ pub fn get32(idx: u32) u32 {
     var data: u32 = undefined;
 
     switch (idx) {
+        @enumToInt(COP0Reg.EntryLo0) => {
+            data = @bitCast(u32, entryLo0);
+        },
+        @enumToInt(COP0Reg.EntryLo1) => {
+            data = @bitCast(u32, entryLo1);
+        },
+        @enumToInt(COP0Reg.PageMask) => {
+            data = @bitCast(u32, pageMask);
+        },
         @enumToInt(COP0Reg.Count) => {
             data = count;
+        },
+        @enumToInt(COP0Reg.EntryHi) => {
+            data = @bitCast(u32, entryHi);
         },
         @enumToInt(COP0Reg.Compare) => {
             data = compare;
@@ -147,6 +210,26 @@ pub fn get32(idx: u32) u32 {
 
 pub fn set32(idx: u32, data: u32) void {
     switch (idx) {
+        @enumToInt(COP0Reg.Index) => {
+            index = @bitCast(Index, @bitCast(u32, index) & ~indexMask);
+            index = @bitCast(Index, @bitCast(u32, index) | (data & indexMask));
+        },
+        @enumToInt(COP0Reg.EntryLo0) => {
+            entryLo0 = @bitCast(EntryLo, @bitCast(u32, entryLo0) & ~entryLoMask);
+            entryLo0 = @bitCast(EntryLo, @bitCast(u32, entryLo0) | (data & entryLoMask));
+        },
+        @enumToInt(COP0Reg.EntryLo1) => {
+            entryLo1 = @bitCast(EntryLo, @bitCast(u32, entryLo1) & ~entryLoMask);
+            entryLo1 = @bitCast(EntryLo, @bitCast(u32, entryLo1) | (data & entryLoMask));
+        },
+        @enumToInt(COP0Reg.PageMask) => {
+            pageMask = @bitCast(PageMask, @bitCast(u32, pageMask) & ~pageMaskMask);
+            pageMask = @bitCast(PageMask, @bitCast(u32, pageMask) | (data & pageMaskMask));
+        },
+        @enumToInt(COP0Reg.EntryHi) => {
+            entryHi = @bitCast(EntryHi, @bitCast(u32, entryHi) & ~entryHiMask);
+            entryHi = @bitCast(EntryHi, @bitCast(u32, entryHi) | (data & entryHiMask));
+        },
         @enumToInt(COP0Reg.Compare) => {
             compare = data;
 
@@ -170,6 +253,39 @@ pub fn set32(idx: u32, data: u32) void {
     }
     
     // std.log.info("[COP0] Write {s}, data: {X}h.", .{@tagName(@intToEnum(COP0Reg, idx)), data});
+}
+
+pub fn tlbTranslate(addr: u64) u64 {
+    std.log.info("[COP0] TLB translate address {X}h", .{addr});
+
+    var idx: u6 = 0;
+    while (idx < 32) : (idx += 1) {
+        const offsetMask: u64 = 0xFFF | (@intCast(u64, tlbEntries[idx].pageMask.mask) << 12);
+        const vpnShift = @intCast(u6, @popCount(u12, tlbEntries[idx].pageMask.mask)) + 12;
+
+        const vpn = addr >> vpnShift;
+
+        var eVPN: u64 = ((@intCast(u64, tlbEntries[idx].entryHi.vpn2h) << 3) | @intCast(u64, tlbEntries[idx].entryHi.vpn2l)) >> (vpnShift - 12);
+
+        // std.log.info("[COP0] TLB translation, VPN: {X}h, entry VPN: {X}h.", .{vpn, eVPN});
+        // std.log.info("[COP0] Page Frame: {X}h:{X}h, G: {}", .{tlbEntries[idx].entryLo0.pfn, tlbEntries[idx].entryLo1.pfn, tlbEntries[idx].entryHi.g});
+        // std.log.info("[COP0] ASID: {X}h", .{tlbEntries[idx].entryHi.asid});
+
+        if (((vpn >> 1) == eVPN) and tlbEntries[idx].entryHi.g) {
+            var pAddr: u64 = undefined;
+            if ((vpn & 1) == 0) {
+                pAddr = (@intCast(u64, tlbEntries[idx].entryLo0.pfn) << 12) | (addr & offsetMask);
+            } else {
+                pAddr = (@intCast(u64, tlbEntries[idx].entryLo1.pfn) << 12) | (addr & offsetMask);
+            }
+
+            std.log.info("[COP0] Translated address: {X}h", .{pAddr});
+
+            return pAddr;
+        }
+    }
+
+    @panic("TLB miss");
 }
 
 pub fn checkForInterrupts() bool {
