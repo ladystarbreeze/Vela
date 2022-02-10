@@ -25,9 +25,19 @@ const AIReg = enum(u64) {
     AIBitRate  = 0x14,
 };
 
+const AIStatus = packed struct {
+    aiFull0: bool = false,
+    _pad0  : u15  = 0,
+    _pad1  : u14  = 0,
+    aiBusy : bool = false,
+    aiFull1: bool = false,
+};
+
 const AIRegs = struct {
-    aiDRAMAddr: [2]u24 = [2]u24{0, 0},
-    aiDMALen  : [2]u18 = [2]u18{0, 0},
+    aiDRAMAddr: [2]u24 = undefined,
+    aiDMALen  : [2]u18 = undefined,
+
+    aiStatus: AIStatus = AIStatus{},
 
     aiActiveDMAs: u32 = 0,
 };
@@ -39,14 +49,14 @@ pub fn read32(pAddr: u64) u32 {
 
     switch (pAddr & 0xFF) {
         @enumToInt(AIReg.AILen) => {
-            warn("[AI] Read32 @ pAddr {X}h (AI Length).", .{pAddr});
+            info("[AI] Read32 @ pAddr {X}h (AI Length).", .{pAddr});
 
             data = aiRegs.aiDMALen[0];
         },
         @enumToInt(AIReg.AIStatus) => {
-            warn("[AI] Read32 @ pAddr {X}h (AI Status).", .{pAddr});
+            info("[AI] Read32 @ pAddr {X}h (AI Status).", .{pAddr});
 
-            data = (1 << 24) | (1 << 20);
+            data = @bitCast(u32, aiRegs.aiStatus) | (1 << 24) | (1 << 20);
         },
         else => {
             warn("[AI] Unhandled read32 @ pAddr {X}h.", .{pAddr});
@@ -61,14 +71,14 @@ pub fn read32(pAddr: u64) u32 {
 pub fn write32(pAddr: u64, data: u32) void {
     switch (pAddr & 0xFF) {
         @enumToInt(AIReg.AIDRAMAddr) => {
-            warn("[AI] Write32 @ pAddr {X}h (AI DRAM Address), data: {X}h.", .{pAddr, data});
+            info("[AI] Write32 @ pAddr {X}h (AI DRAM Address), data: {X}h.", .{pAddr, data});
 
             if (aiRegs.aiActiveDMAs < 2) {
                 aiRegs.aiDRAMAddr[aiRegs.aiActiveDMAs] = @truncate(u24, data & 0xFF_FFF8);
             }
         },
         @enumToInt(AIReg.AILen) => {
-            warn("[AI] Write32 @ pAddr {X}h (AI Length), data: {X}h.", .{pAddr, data});
+            info("[AI] Write32 @ pAddr {X}h (AI Length), data: {X}h.", .{pAddr, data});
 
             if (aiRegs.aiActiveDMAs < 2 and data != 0) {
                 aiRegs.aiDMALen[aiRegs.aiActiveDMAs] = @truncate(u18, data & 0x3FFF8);
@@ -90,5 +100,4 @@ pub fn write32(pAddr: u64, data: u32) void {
 }
 
 pub fn step(c: i64) void {
-
 }

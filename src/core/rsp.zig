@@ -38,6 +38,16 @@ fn clampu32(data: i32) u16 {
     return @truncate(u16, @bitCast(u32, data));
 }
 
+fn isSignExtended(hi: u16, lo: u16) bool {
+    if (hi == 0) {
+        return (lo & 0x8000) == 0;
+    } else if (hi == 0xFFFF) {
+        return (lo & 0x8000) == 0x8000;
+    } else {
+        return false;
+    }
+}
+
 /// Sign extend 8-bit data
 fn exts8(data: u8) u32 {
     return @bitCast(u32, @intCast(i32, @bitCast(i8, data)));
@@ -160,6 +170,7 @@ const RSPVUStoreOpcode = enum(u32) {
 
 const RSPVUOpcode = enum(u32) {
     VMULF = 0x00,
+    VMULU = 0x01,
     VRNDP = 0x02,
     VMUDL = 0x04,
     VMUDM = 0x05,
@@ -684,6 +695,8 @@ fn readDMEM(comptime T: type, pAddr: u32) T {
     var data: T = undefined;
 
     @memcpy(@ptrCast([*]u8, &data), @ptrCast([*]u8, &spDMEM[pAddr & 0xFFF]), @sizeOf(T));
+
+    if (pAddr == 0x364) info("[RSP] Read audio buffer size, data: {X}h.", .{@byteSwap(T, data)});
     
     return @byteSwap(T, data);
 }
@@ -798,16 +811,21 @@ pub fn write32(pAddr: u64, data: u32) void {
 fn writeDMEM(comptime T: type, pAddr: u32, data: T) void {
     var data_: T = @byteSwap(T, data);
 
+    if (pAddr ==  0x364) info("[RSP] Set audio buffer size, data: {X}h.", .{data});
+
+    if (pAddr >= 0x1000) @panic("DMEM write out of bounds");
+
     @memcpy(@ptrCast([*]u8, &spDMEM[pAddr & 0xFFF]), @ptrCast([*]u8, &data_), @sizeOf(T));
 }
 
 fn fetchInstr() u32 {
     var data: u32 = undefined;
 
-    rspRegs.cpc = rspRegs.pc & 0xFFC;
-    rspRegs.pc  = rspRegs.cpc;
+    rspRegs.cpc = rspRegs.pc;
 
-    if ((rspRegs.cpc & 3) != 0) @panic("unaligned program counter");
+    if ((rspRegs.cpc & 3) != 0) {
+        @panic("unaligned program counter");
+    }
 
     @memcpy(@ptrCast([*]u8, &data), @ptrCast([*]u8, &spIMEM[rspRegs.pc & 0xFFF]), 4);
 
@@ -949,6 +967,7 @@ fn decodeInstr(instr: u32) void {
                 @enumToInt(RSPCP2Opcode.COMPUTE) ... @enumToInt(RSPCP2Opcode.COMPUTE) + 0xF => {
                     switch (getFunct(instr)) {
                         @enumToInt(RSPVUOpcode.VMULF) => iVMULF(instr),
+                        @enumToInt(RSPVUOpcode.VMULU) => iVMULU(instr),
                         @enumToInt(RSPVUOpcode.VRNDP) => iVRNDP(instr),
                         @enumToInt(RSPVUOpcode.VMUDL) => iVMUDL(instr),
                         @enumToInt(RSPVUOpcode.VMUDM) => iVMUDM(instr),
@@ -2044,7 +2063,7 @@ fn iVMACU(instr: u32) void {
 
     var i: u32 = 0;
     while (i < 8) : (i += 1) {
-        const prod = @intCast(i32, s.getSLane(i)) * @intCast(i32,t.getSLane(i)) * 2;
+        const prod = @intCast(i32, s.getSLane(i)) * @intCast(i32, t.getSLane(i)) * 2;
 
         rspRegs.acc.setSLane(i, rspRegs.acc.getSLane(i) + @intCast(i48, prod));
 
@@ -2074,7 +2093,7 @@ fn iVMADH(instr: u32) void {
 
     var i: u32 = 0;
     while (i < 8) : (i += 1) {
-        const prod = @intCast(i32, s.getULane(i) *% t.getULane(i));
+        const prod = @intCast(i32, s.getSLane(i)) * @intCast(i32, t.getSLane(i));
 
         rspRegs.acc.setSLane(i, rspRegs.acc.getSLane(i) + (@intCast(i48, prod) << 16));
 
@@ -2099,9 +2118,16 @@ fn iVMADL(instr: u32) void {
     while (i < 8) : (i += 1) {
         const prod = @intCast(u32, s.getULane(i)) * @intCast(u32, t.getULane(i));
 
-        rspRegs.acc.setSLane(i, rspRegs.acc.getSLane(i) + (@intCast(i48, @bitCast(i32, prod)) >> 16));
+        rspRegs.acc.setSLane(i, rspRegs.acc.getSLane(i) + (@intCast(i48, prod) >> 16));
 
-        rspRegs.setLane(vd, i, clampu32(@truncate(i32, rspRegs.acc.getSLane(i))));
+        // Taken from Dillonb's N64 emulator (see iVMADN())
+        if (isSignExtended(rspRegs.acc.getLane(i, 0), rspRegs.acc.getLane(i, 1))) {
+            rspRegs.setLane(vd, i, rspRegs.acc.getLane(i, 2));
+        } else if (@bitCast(i16, rspRegs.acc.getLane(i, 0)) < 0) {
+            rspRegs.setLane(vd, i, 0);
+        } else {
+            rspRegs.setLane(vd, i, 0xFFFF);
+        }
     }
 
     if (isDisasm) info("[RSP] VMADL ${}, ${}, ${}[{}]", .{vd, vs, vt, e});
@@ -2120,9 +2146,9 @@ fn iVMADM(instr: u32) void {
 
     var i: u32 = 0;
     while (i < 8) : (i += 1) {
-        const prod = @intCast(u32, s.getULane(i)) * @intCast(u32, t.getULane(i));
+        const prod = @intCast(i32, s.getSLane(i)) * @intCast(i32, t.getULane(i));
 
-        rspRegs.acc.setSLane(i, rspRegs.acc.getSLane(i) + @intCast(i48, @bitCast(i32, prod)));
+        rspRegs.acc.setSLane(i, rspRegs.acc.getSLane(i) + @intCast(i48, prod));
 
         rspRegs.setLane(vd, i, clamps32(@truncate(i32, rspRegs.acc.getSLane(i) >> 16)));
     }
@@ -2143,11 +2169,18 @@ fn iVMADN(instr: u32) void {
 
     var i: u32 = 0;
     while (i < 8) : (i += 1) {
-        const prod = @intCast(u32, s.getULane(i)) * @intCast(u32, t.getULane(i));
+        const prod = @intCast(i32, s.getULane(i)) * @intCast(i32, t.getSLane(i));
 
-        rspRegs.acc.setSLane(i, rspRegs.acc.getSLane(i) + @intCast(i48, @bitCast(i32, prod)));
+        rspRegs.acc.setSLane(i, rspRegs.acc.getSLane(i) + @intCast(i48, prod));
 
-        rspRegs.setLane(vd, i, clampu32(@truncate(i32, rspRegs.acc.getSLane(i))));
+        // Taken from Dillonb's N64 emulator (https://github.com/Dillonb/n64/blob/68a0c186d29b3fa02ec038782313c5ae8e181c06/src/cpu/rsp_vector_instructions.c#L1058)
+        if (isSignExtended(rspRegs.acc.getLane(i, 0), rspRegs.acc.getLane(i, 1))) {
+            rspRegs.setLane(vd, i, rspRegs.acc.getLane(i, 2));
+        } else if (@bitCast(i16, rspRegs.acc.getLane(i, 0)) < 0) {
+            rspRegs.setLane(vd, i, 0);
+        } else {
+            rspRegs.setLane(vd, i, 0xFFFF);
+        }
     }
 
     if (isDisasm) info("[RSP] VMADN ${}, ${}, ${}[{}]", .{vd, vs, vt, e});
@@ -2221,11 +2254,11 @@ fn iVMUDH(instr: u32) void {
 
     var i: u32 = 0;
     while (i < 8) : (i += 1) {
-        const prod = @intCast(i32, s.getSLane(i) *% t.getSLane(i));
+        const prod = @intCast(i32, s.getSLane(i) * @intCast(i32, t.getSLane(i)));
 
-        rspRegs.acc.setSLane(i, @intCast(i48, prod));
+        rspRegs.acc.setSLane(i, @intCast(i48, prod) << 16);
 
-        rspRegs.setLane(vd, i, clamps32(@truncate(i32, rspRegs.acc.getSLane(i) >> 16)));
+        rspRegs.setLane(vd, i, clamps32(prod));
     }
 
     if (isDisasm) info("[RSP] VMUDH ${}, ${}, ${}[{}]", .{vd, vs, vt, e});
@@ -2290,11 +2323,18 @@ fn iVMUDN(instr: u32) void {
 
     var i: u32 = 0;
     while (i < 8) : (i += 1) {
-        const prod = @intCast(i32, s.getSLane(i) *% t.getSLane(i));
+        const prod = @intCast(i32, s.getULane(i) * @intCast(i32, t.getSLane(i)));
 
         rspRegs.acc.setSLane(i, @intCast(i48, prod));
 
-        rspRegs.setLane(vd, i, clampu32(@truncate(i32, rspRegs.acc.getSLane(i))));
+        // Taken from Dillonb's N64 emulator (see iVMADN())
+        if (isSignExtended(rspRegs.acc.getLane(i, 0), rspRegs.acc.getLane(i, 1))) {
+            rspRegs.setLane(vd, i, rspRegs.acc.getLane(i, 2));
+        } else if (@bitCast(i16, rspRegs.acc.getLane(i, 0)) < 0) {
+            rspRegs.setLane(vd, i, 0);
+        } else {
+            rspRegs.setLane(vd, i, 0xFFFF);
+        }
     }
 
     if (isDisasm) info("[RSP] VMUDN ${}, ${}, ${}[{}]", .{vd, vs, vt, e});
@@ -2321,6 +2361,29 @@ fn iVMULF(instr: u32) void {
     }
 
     if (isDisasm) info("[RSP] VMULF ${}, ${}, ${}[{}]", .{vd, vs, vt, e});
+}
+
+/// VMULU - Vector MULtiply of Unsigned fractions
+fn iVMULU(instr: u32) void {
+    const vd = getVd(instr);
+    const vs = getVs(instr);
+    const vt = getVt(instr);
+
+    const e = getBroadcastMod(instr);
+
+    const s = rspRegs.getVPR(vs);
+    const t = rspRegs.broadcast(vt, e);
+
+    var i: u32 = 0;
+    while (i < 8) : (i += 1) {
+        const prod = @intCast(i32, s.getSLane(i)) * @intCast(i32, t.getSLane(i)) * 2 + 0x8000;
+
+        rspRegs.acc.setSLane(i, @intCast(i48, prod));
+
+        rspRegs.setLane(vd, i, clampu32(@truncate(i32, rspRegs.acc.getSLane(i) >> 16)));
+    }
+
+    if (isDisasm) info("[RSP] VMULU ${}, ${}, ${}[{}]", .{vd, vs, vt, e});
 }
 
 /// VOR - Vector OR
@@ -2451,13 +2514,16 @@ fn iVSAR(instr: u32) void {
     const vs = getVs(instr);
     const vt = getVt(instr);
 
-    const e = getBroadcastMod(instr) & 7;
-
-    if (e > 2) @panic("invalid broadcast modifier");
+    const e = getBroadcastMod(instr);
 
     var i: u32 = 0;
     while (i < 8) : (i += 1) {
-        rspRegs.setLane(vd, i, rspRegs.acc.getLane(i, e));
+        switch (e) {
+            0x8  => rspRegs.setLane(vd, i, rspRegs.acc.getLane(i, 0)),
+            0x9  => rspRegs.setLane(vd, i, rspRegs.acc.getLane(i, 1)),
+            0xA  => rspRegs.setLane(vd, i, rspRegs.acc.getLane(i, 2)),
+            else => rspRegs.setLane(vd, i, 0),
+        }
     }
 
     if (isDisasm) info("[RSP] VSAR ${}, ${}, ${}[{}]", .{vd, vs, vt, e});
